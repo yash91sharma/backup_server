@@ -1,1 +1,11 @@
-# Sends ntfy HTTP POST notifications; silently skipped when ntfy_topic is empty
+from typing import Optional
+
+
+async def send_notification(
+    server_url: str,
+    topic: str,
+    title: str,
+    message: str,
+    token: Optional[str] = None,
+) -> None:
+    pass

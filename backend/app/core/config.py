@@ -1,1 +1,12 @@
-# Pydantic BaseSettings: reads TZ and any other env vars; single source of truth for configuration
+from pydantic_settings import BaseSettings
+
+
+class Settings(BaseSettings):
+    tz: str = "UTC"
+
+    class Config:
+        env_file = ".env"
+        extra = "ignore"
+
+
+settings = Settings()

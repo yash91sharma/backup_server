@@ -1,1 +1,9 @@
-// Table of Snapshot rows: time, ID, tags, paths, size — read from DB via GET /jobs/{id}/snapshots
+import type { Snapshot } from '../lib/types'
+
+export interface SnapshotListProps {
+  snapshots: Snapshot[]
+}
+
+export default function SnapshotList(_props: SnapshotListProps) {
+  return null
+}

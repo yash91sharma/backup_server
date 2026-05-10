@@ -1,0 +1,19 @@
+services:
+  dev:
+    build:
+      context: ..
+      dockerfile: .devcontainer/Dockerfile
+    volumes:
+      # Mount the entire repo into the container
+      - ..:/workspace:cached
+      # Keep the Python venv inside the container only (not visible on host)
+      - venv:/opt/venv
+    working_dir: /workspace
+    environment:
+      # Lets `pytest` and test imports resolve `app.*` without a pip install -e
+      - PYTHONPATH=/workspace/backend
+    # Keep the container alive so `docker compose exec` and VS Code can attach
+    command: sleep infinity
+
+volumes:
+  venv:

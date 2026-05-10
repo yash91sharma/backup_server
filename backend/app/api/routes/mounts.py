@@ -1,1 +1,3 @@
-# GET /mounts/sources, /mounts/sources/{label}/subdirs, /mounts/destinations, POST /mounts/destinations/rename
+from fastapi import APIRouter
+
+router = APIRouter(prefix="/mounts", tags=["mounts"])

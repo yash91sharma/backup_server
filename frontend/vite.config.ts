@@ -1,1 +1,26 @@
-// Vite config: base set to '/static/' to match FastAPI StaticFiles mount; /api proxy to backend in dev
+/// <reference types="vitest" />
+import { defineConfig } from 'vite'
+import react from '@vitejs/plugin-react'
+
+export default defineConfig({
+  base: '/static/',
+  plugins: [react()],
+  server: {
+    proxy: {
+      '/api': 'http://localhost:12345',
+    },
+  },
+  test: {
+    globals: true,
+    environment: 'jsdom',
+    setupFiles: ['./src/test/setup.ts'],
+    css: false,
+    pool: 'threads',
+    poolOptions: {
+      threads: {
+        minThreads: 2,
+        maxThreads: 8,
+      },
+    },
+  },
+})

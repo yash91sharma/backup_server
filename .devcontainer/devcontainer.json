@@ -1,0 +1,68 @@
+{
+  "name": "Backup Server Dev",
+  "dockerComposeFile": "docker-compose.yml",
+  "service": "dev",
+  "workspaceFolder": "/workspace",
+
+  // Runs once after the container is first created (or after a rebuild).
+  // Re-running is safe — pip and npm are idempotent.
+  "postCreateCommand": "bash /workspace/.devcontainer/init.sh",
+
+  // Ports forwarded to localhost so you can hit the app and Vite from the host
+  "forwardPorts": [12345, 5173],
+  "portsAttributes": {
+    "12345": { "label": "FastAPI" },
+    "5173": { "label": "Vite dev server" }
+  },
+
+  "remoteEnv": {
+    "PYTHONPATH": "/workspace/backend"
+  },
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        // Python
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "ms-python.debugpy",
+        "charliermarsh.ruff",
+        // Testing
+        "ms-python.python",
+        "vitest.explorer",
+        // TypeScript / React
+        "dbaeumer.vscode-eslint",
+        "esbenp.prettier-vscode",
+        "bradlc.vscode-tailwindcss",
+        // Utilities
+        "EditorConfig.EditorConfig",
+        "usernamehw.errorlens"
+      ],
+      "settings": {
+        // Point VS Code at the venv inside the container
+        "python.defaultInterpreterPath": "/opt/venv/bin/python",
+
+        // pytest integration
+        "python.testing.pytestEnabled": true,
+        "python.testing.pytestPath": "/opt/venv/bin/pytest",
+        "python.testing.cwd": "${workspaceFolder}/backend",
+        "python.testing.pytestArgs": ["tests"],
+
+        // Format on save
+        "editor.formatOnSave": true,
+        "[python]": {
+          "editor.defaultFormatter": "charliermarsh.ruff"
+        },
+        "[typescript]": {
+          "editor.defaultFormatter": "esbenp.prettier-vscode"
+        },
+        "[typescriptreact]": {
+          "editor.defaultFormatter": "esbenp.prettier-vscode"
+        },
+
+        // Terminal drops into /workspace by default
+        "terminal.integrated.cwd": "/workspace"
+      }
+    }
+  }
+}

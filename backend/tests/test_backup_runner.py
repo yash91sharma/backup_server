@@ -1,1 +1,1230 @@
-# Tests for the full backup run lifecycle in backup_runner.py (Steps 1–12)
+"""Tests for the full backup run lifecycle (Steps 1–12)."""
+
+import asyncio
+import json
+import uuid
+from datetime import datetime, timezone
+from unittest.mock import patch
+
+from sqlalchemy.ext.asyncio import async_sessionmaker
+
+from app.services.backup_runner import _active_jobs, run_backup
+
+REPO = "/destinations/main"
+JOB_ID = uuid.uuid4()
+RUN_ID = uuid.uuid4()
+
+BACKUP_SUMMARY = {
+    "message_type": "summary",
+    "files_new": 10,
+    "files_changed": 5,
+    "files_unmodified": 1000,
+    "dirs_new": 2,
+    "dirs_changed": 1,
+    "dirs_unmodified": 50,
+    "data_added": 1024000,
+    "data_added_packed": 900000,
+    "total_bytes_processed": 50000000,
+    "snapshot_id": "a" * 64,
+}
+
+
+async def _setup_job(engine, **overrides):
+    from app.db.models import AppSettings, BackupJob, ScheduleType
+
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as s:
+        settings = AppSettings(
+            id=1,
+            ntfy_server_url="https://ntfy.sh",
+            ntfy_topic="",
+            notify_on_start=True,
+            notify_on_success=True,
+            notify_on_failure=True,
+            notify_on_verification=True,
+            default_job_timeout_hours=24,
+        )
+        s.add(settings)
+
+        job = BackupJob(
+            id=str(JOB_ID),
+            name="Test Job",
+            source_label="documents",
+            destination_label="main",
+            restic_password=overrides.pop("restic_password", "s3cret"),
+            schedule_type=ScheduleType.interval,
+            schedule_value="6h",
+            enabled=True,
+            **overrides,
+        )
+        s.add(job)
+        await s.commit()
+        return job
+
+
+async def _get_run(engine, run_id: str):
+    from app.db.models import BackupRun
+
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as s:
+        return await s.get(BackupRun, run_id)
+
+
+# ── Step 2: validate password ─────────────────────────────────────────────────
+
+
+async def test_step2_empty_password_marks_run_failed(engine):
+    await _setup_job(engine, restic_password="")
+    run_id = str(uuid.uuid4())
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    from app.db.models import BackupRun, RunStatus, TriggeredBy
+
+    async with factory() as s:
+        run = BackupRun(
+            id=run_id,
+            job_id=str(JOB_ID),
+            status=RunStatus.running,
+            triggered_by=TriggeredBy.manual,
+            started_at=datetime.now(timezone.utc),
+        )
+        s.add(run)
+        await s.commit()
+
+    await run_backup(JOB_ID, uuid.UUID(run_id))
+
+    run = await _get_run(engine, run_id)
+    assert run.status == RunStatus.failed
+    assert run.error_output is not None
+    assert "password" in run.error_output.lower()
+    assert run.prune_status is not None
+    assert run.check_status is not None
+
+
+# ── Step 4: init check ────────────────────────────────────────────────────────
+
+
+async def test_step4_repo_exists_proceeds(engine):
+    await _setup_job(engine)
+    run_id = str(uuid.uuid4())
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    from app.db.models import BackupRun, RunStatus, TriggeredBy
+
+    async with factory() as s:
+        run = BackupRun(
+            id=run_id,
+            job_id=str(JOB_ID),
+            status=RunStatus.running,
+            triggered_by=TriggeredBy.manual,
+            started_at=datetime.now(timezone.utc),
+        )
+        s.add(run)
+        await s.commit()
+
+    with (
+        patch("app.services.restic.restic_cat_config", return_value=(0, '{"v":2}', "")),
+        patch(
+            "app.services.restic.restic_backup",
+            return_value=(0, json.dumps(BACKUP_SUMMARY), "", BACKUP_SUMMARY),
+        ),
+        patch("app.services.restic.restic_prune", return_value=(0, "", "")),
+        patch("app.services.restic.restic_snapshots", return_value=(0, [], "")),
+        patch("app.services.notifications.send_notification"),
+    ):
+        await run_backup(JOB_ID, uuid.UUID(run_id))
+
+    run = await _get_run(engine, run_id)
+    assert run.status == RunStatus.success
+
+
+async def test_step4_repo_not_found_inits_repo(engine):
+    await _setup_job(engine)
+    run_id = str(uuid.uuid4())
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    from app.db.models import BackupRun, RunStatus, TriggeredBy
+
+    async with factory() as s:
+        run = BackupRun(
+            id=run_id,
+            job_id=str(JOB_ID),
+            status=RunStatus.running,
+            triggered_by=TriggeredBy.manual,
+            started_at=datetime.now(timezone.utc),
+        )
+        s.add(run)
+        await s.commit()
+
+    init_called = {"v": False}
+
+    async def fake_init(*args, **kwargs):
+        init_called["v"] = True
+        return (0, "created repo", "")
+
+    with (
+        patch(
+            "app.services.restic.restic_cat_config",
+            return_value=(1, "", "Fatal: no such file or directory"),
+        ),
+        patch("app.services.restic.restic_init", side_effect=fake_init),
+        patch(
+            "app.services.restic.restic_backup",
+            return_value=(0, json.dumps(BACKUP_SUMMARY), "", BACKUP_SUMMARY),
+        ),
+        patch("app.services.restic.restic_prune", return_value=(0, "", "")),
+        patch("app.services.restic.restic_snapshots", return_value=(0, [], "")),
+        patch("app.services.notifications.send_notification"),
+    ):
+        await run_backup(JOB_ID, uuid.UUID(run_id))
+
+    assert init_called["v"] is True
+
+
+async def test_step4_wrong_password_marks_failed(engine):
+    await _setup_job(engine)
+    run_id = str(uuid.uuid4())
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    from app.db.models import BackupRun, RunStatus, TriggeredBy
+
+    async with factory() as s:
+        run = BackupRun(
+            id=run_id,
+            job_id=str(JOB_ID),
+            status=RunStatus.running,
+            triggered_by=TriggeredBy.manual,
+            started_at=datetime.now(timezone.utc),
+        )
+        s.add(run)
+        await s.commit()
+
+    with patch(
+        "app.services.restic.restic_cat_config",
+        return_value=(1, "", "wrong password or no key found"),
+    ):
+        await run_backup(JOB_ID, uuid.UUID(run_id))
+
+    run = await _get_run(engine, run_id)
+    assert run.status == RunStatus.failed
+    assert run.prune_status.value == "skipped"
+    assert run.check_status.value == "skipped"
+
+
+async def test_step4_init_failure_marks_failed(engine):
+    await _setup_job(engine)
+    run_id = str(uuid.uuid4())
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    from app.db.models import BackupRun, RunStatus, TriggeredBy
+
+    async with factory() as s:
+        run = BackupRun(
+            id=run_id,
+            job_id=str(JOB_ID),
+            status=RunStatus.running,
+            triggered_by=TriggeredBy.manual,
+            started_at=datetime.now(timezone.utc),
+        )
+        s.add(run)
+        await s.commit()
+
+    with (
+        patch(
+            "app.services.restic.restic_cat_config",
+            return_value=(1, "", "does not exist"),
+        ),
+        patch(
+            "app.services.restic.restic_init", return_value=(1, "", "permission denied")
+        ),
+    ):
+        await run_backup(JOB_ID, uuid.UUID(run_id))
+
+    run = await _get_run(engine, run_id)
+    assert run.status == RunStatus.failed
+
+
+# ── Step 5: backup ────────────────────────────────────────────────────────────
+
+
+async def test_step5_backup_failure_marks_run_failed(engine):
+    await _setup_job(engine)
+    run_id = str(uuid.uuid4())
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    from app.db.models import BackupRun, RunStatus, TriggeredBy
+
+    async with factory() as s:
+        run = BackupRun(
+            id=run_id,
+            job_id=str(JOB_ID),
+            status=RunStatus.running,
+            triggered_by=TriggeredBy.manual,
+            started_at=datetime.now(timezone.utc),
+        )
+        s.add(run)
+        await s.commit()
+
+    with (
+        patch("app.services.restic.restic_cat_config", return_value=(0, "{}", "")),
+        patch(
+            "app.services.restic.restic_backup",
+            return_value=(1, "", "fatal: source not found", None),
+        ),
+        patch("app.services.notifications.send_notification"),
+    ):
+        await run_backup(JOB_ID, uuid.UUID(run_id))
+
+    run = await _get_run(engine, run_id)
+    assert run.status == RunStatus.failed
+    assert run.error_output is not None
+    assert run.prune_status.value == "skipped"
+    assert run.check_status.value == "skipped"
+
+
+async def test_step5_backup_timeout_marks_failed(engine):
+    await _setup_job(engine)
+    run_id = str(uuid.uuid4())
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    from app.db.models import BackupRun, RunStatus, TriggeredBy
+
+    async with factory() as s:
+        run = BackupRun(
+            id=run_id,
+            job_id=str(JOB_ID),
+            status=RunStatus.running,
+            triggered_by=TriggeredBy.manual,
+            started_at=datetime.now(timezone.utc),
+        )
+        s.add(run)
+        await s.commit()
+
+    async def slow_backup(*args, **kwargs):
+        raise asyncio.TimeoutError()
+
+    with (
+        patch("app.services.restic.restic_cat_config", return_value=(0, "{}", "")),
+        patch("app.services.restic.restic_backup", side_effect=slow_backup),
+        patch("app.services.notifications.send_notification"),
+    ):
+        await run_backup(JOB_ID, uuid.UUID(run_id))
+
+    run = await _get_run(engine, run_id)
+    assert run.status == RunStatus.failed
+    assert "timed out" in (run.error_output or "").lower()
+
+
+# ── Step 7: stats update ──────────────────────────────────────────────────────
+
+
+async def test_step7_stats_populated_from_summary(engine):
+    await _setup_job(engine)
+    run_id = str(uuid.uuid4())
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    from app.db.models import BackupRun, RunStatus, TriggeredBy
+
+    async with factory() as s:
+        run = BackupRun(
+            id=run_id,
+            job_id=str(JOB_ID),
+            status=RunStatus.running,
+            triggered_by=TriggeredBy.manual,
+            started_at=datetime.now(timezone.utc),
+        )
+        s.add(run)
+        await s.commit()
+
+    with (
+        patch("app.services.restic.restic_cat_config", return_value=(0, "{}", "")),
+        patch(
+            "app.services.restic.restic_backup",
+            return_value=(0, json.dumps(BACKUP_SUMMARY), "", BACKUP_SUMMARY),
+        ),
+        patch("app.services.restic.restic_prune", return_value=(0, "", "")),
+        patch("app.services.restic.restic_snapshots", return_value=(0, [], "")),
+        patch("app.services.notifications.send_notification"),
+    ):
+        await run_backup(JOB_ID, uuid.UUID(run_id))
+
+    run = await _get_run(engine, run_id)
+    assert run.files_new == 10
+    assert run.files_changed == 5
+    assert run.data_added_bytes == 1024000
+    assert run.total_bytes_processed == 50000000
+
+
+# ── Step 8: prune ─────────────────────────────────────────────────────────────
+
+
+async def test_step8_prune_called_after_success(engine):
+    await _setup_job(engine)
+    run_id = str(uuid.uuid4())
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    from app.db.models import BackupRun, RunStatus, TriggeredBy
+
+    async with factory() as s:
+        run = BackupRun(
+            id=run_id,
+            job_id=str(JOB_ID),
+            status=RunStatus.running,
+            triggered_by=TriggeredBy.manual,
+            started_at=datetime.now(timezone.utc),
+        )
+        s.add(run)
+        await s.commit()
+
+    prune_called = {"v": False}
+
+    async def fake_prune(*args, **kwargs):
+        prune_called["v"] = True
+        return (0, "", "")
+
+    with (
+        patch("app.services.restic.restic_cat_config", return_value=(0, "{}", "")),
+        patch(
+            "app.services.restic.restic_backup",
+            return_value=(0, json.dumps(BACKUP_SUMMARY), "", BACKUP_SUMMARY),
+        ),
+        patch("app.services.restic.restic_prune", side_effect=fake_prune),
+        patch("app.services.restic.restic_snapshots", return_value=(0, [], "")),
+        patch("app.services.notifications.send_notification"),
+    ):
+        await run_backup(JOB_ID, uuid.UUID(run_id))
+
+    assert prune_called["v"] is True
+
+
+async def test_step8_forget_prune_called_when_retention_set(engine):
+    await _setup_job(engine, retain_keep_last=7)
+    run_id = str(uuid.uuid4())
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    from app.db.models import BackupRun, RunStatus, TriggeredBy
+
+    async with factory() as s:
+        run = BackupRun(
+            id=run_id,
+            job_id=str(JOB_ID),
+            status=RunStatus.running,
+            triggered_by=TriggeredBy.manual,
+            started_at=datetime.now(timezone.utc),
+        )
+        s.add(run)
+        await s.commit()
+
+    forget_called = {"v": False}
+
+    async def fake_forget(*args, **kwargs):
+        forget_called["v"] = True
+        return (0, "", "")
+
+    with (
+        patch("app.services.restic.restic_cat_config", return_value=(0, "{}", "")),
+        patch(
+            "app.services.restic.restic_backup",
+            return_value=(0, json.dumps(BACKUP_SUMMARY), "", BACKUP_SUMMARY),
+        ),
+        patch("app.services.restic.restic_forget_prune", side_effect=fake_forget),
+        patch("app.services.restic.restic_snapshots", return_value=(0, [], "")),
+        patch("app.services.notifications.send_notification"),
+    ):
+        await run_backup(JOB_ID, uuid.UUID(run_id))
+
+    assert forget_called["v"] is True
+
+
+async def test_step8_prune_failure_nonfatal(engine):
+    await _setup_job(engine)
+    run_id = str(uuid.uuid4())
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    from app.db.models import BackupRun, RunStatus, TriggeredBy
+
+    async with factory() as s:
+        run = BackupRun(
+            id=run_id,
+            job_id=str(JOB_ID),
+            status=RunStatus.running,
+            triggered_by=TriggeredBy.manual,
+            started_at=datetime.now(timezone.utc),
+        )
+        s.add(run)
+        await s.commit()
+
+    with (
+        patch("app.services.restic.restic_cat_config", return_value=(0, "{}", "")),
+        patch(
+            "app.services.restic.restic_backup",
+            return_value=(0, json.dumps(BACKUP_SUMMARY), "", BACKUP_SUMMARY),
+        ),
+        patch("app.services.restic.restic_prune", return_value=(1, "", "disk full")),
+        patch("app.services.restic.restic_snapshots", return_value=(0, [], "")),
+        patch("app.services.notifications.send_notification"),
+    ):
+        await run_backup(JOB_ID, uuid.UUID(run_id))
+
+    run = await _get_run(engine, run_id)
+    assert run.status == RunStatus.success
+    assert run.prune_status.value == "failed"
+    assert run.prune_error_output is not None
+
+
+# ── Step 9: snapshot reconciliation ──────────────────────────────────────────
+
+
+async def test_step9_snapshot_upserted(engine):
+    await _setup_job(engine)
+    run_id = str(uuid.uuid4())
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    from app.db.models import BackupRun, RunStatus, TriggeredBy
+
+    async with factory() as s:
+        run = BackupRun(
+            id=run_id,
+            job_id=str(JOB_ID),
+            status=RunStatus.running,
+            triggered_by=TriggeredBy.manual,
+            started_at=datetime.now(timezone.utc),
+        )
+        s.add(run)
+        await s.commit()
+
+    snap = {
+        "id": "a" * 64,
+        "time": "2024-01-01T12:00:00Z",
+        "hostname": "myhost",
+        "paths": ["/sources/documents"],
+    }
+
+    with (
+        patch("app.services.restic.restic_cat_config", return_value=(0, "{}", "")),
+        patch(
+            "app.services.restic.restic_backup",
+            return_value=(0, json.dumps(BACKUP_SUMMARY), "", BACKUP_SUMMARY),
+        ),
+        patch("app.services.restic.restic_prune", return_value=(0, "", "")),
+        patch("app.services.restic.restic_snapshots", return_value=(0, [snap], "")),
+        patch("app.services.notifications.send_notification"),
+    ):
+        await run_backup(JOB_ID, uuid.UUID(run_id))
+
+    from sqlalchemy import select
+
+    from app.db.models import Snapshot
+
+    async with factory() as s:
+        result = await s.execute(select(Snapshot).where(Snapshot.job_id == str(JOB_ID)))
+        snaps = result.scalars().all()
+    assert len(snaps) == 1
+    assert snaps[0].snapshot_id == "a" * 64
+
+
+# ── Step 10: finalize ─────────────────────────────────────────────────────────
+
+
+async def test_step10_success_status_and_duration(engine):
+    await _setup_job(engine)
+    run_id = str(uuid.uuid4())
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    from app.db.models import BackupRun, RunStatus, TriggeredBy
+
+    async with factory() as s:
+        run = BackupRun(
+            id=run_id,
+            job_id=str(JOB_ID),
+            status=RunStatus.running,
+            triggered_by=TriggeredBy.manual,
+            started_at=datetime.now(timezone.utc),
+        )
+        s.add(run)
+        await s.commit()
+
+    with (
+        patch("app.services.restic.restic_cat_config", return_value=(0, "{}", "")),
+        patch(
+            "app.services.restic.restic_backup",
+            return_value=(0, json.dumps(BACKUP_SUMMARY), "", BACKUP_SUMMARY),
+        ),
+        patch("app.services.restic.restic_prune", return_value=(0, "", "")),
+        patch("app.services.restic.restic_snapshots", return_value=(0, [], "")),
+        patch("app.services.notifications.send_notification"),
+    ):
+        await run_backup(JOB_ID, uuid.UUID(run_id))
+
+    run = await _get_run(engine, run_id)
+    assert run.status == RunStatus.success
+    assert run.finished_at is not None
+    assert run.duration_seconds is not None
+    assert run.duration_seconds >= 0
+
+
+async def test_step10_check_status_skipped_when_check_disabled(engine):
+    await _setup_job(engine, check_enabled=False)
+    run_id = str(uuid.uuid4())
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    from app.db.models import BackupRun, RunStatus, TriggeredBy
+
+    async with factory() as s:
+        run = BackupRun(
+            id=run_id,
+            job_id=str(JOB_ID),
+            status=RunStatus.running,
+            triggered_by=TriggeredBy.manual,
+            started_at=datetime.now(timezone.utc),
+        )
+        s.add(run)
+        await s.commit()
+
+    with (
+        patch("app.services.restic.restic_cat_config", return_value=(0, "{}", "")),
+        patch(
+            "app.services.restic.restic_backup",
+            return_value=(0, json.dumps(BACKUP_SUMMARY), "", BACKUP_SUMMARY),
+        ),
+        patch("app.services.restic.restic_prune", return_value=(0, "", "")),
+        patch("app.services.restic.restic_snapshots", return_value=(0, [], "")),
+        patch("app.services.notifications.send_notification"),
+    ):
+        await run_backup(JOB_ID, uuid.UUID(run_id))
+
+    run = await _get_run(engine, run_id)
+    assert run.check_status.value == "skipped"
+
+
+# ── Step 12: integrity check ──────────────────────────────────────────────────
+
+
+async def test_step12_check_passed(engine):
+    from app.db.models import CheckMode
+
+    await _setup_job(engine, check_enabled=True, check_mode=CheckMode.structural)
+    run_id = str(uuid.uuid4())
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    from app.db.models import BackupRun, RunStatus, TriggeredBy
+
+    async with factory() as s:
+        run = BackupRun(
+            id=run_id,
+            job_id=str(JOB_ID),
+            status=RunStatus.running,
+            triggered_by=TriggeredBy.manual,
+            started_at=datetime.now(timezone.utc),
+        )
+        s.add(run)
+        await s.commit()
+
+    with (
+        patch("app.services.restic.restic_cat_config", return_value=(0, "{}", "")),
+        patch(
+            "app.services.restic.restic_backup",
+            return_value=(0, json.dumps(BACKUP_SUMMARY), "", BACKUP_SUMMARY),
+        ),
+        patch("app.services.restic.restic_prune", return_value=(0, "", "")),
+        patch("app.services.restic.restic_snapshots", return_value=(0, [], "")),
+        patch("app.services.restic.restic_check", return_value=(0, "no errors", "")),
+        patch("app.services.notifications.send_notification"),
+    ):
+        await run_backup(JOB_ID, uuid.UUID(run_id))
+
+    run = await _get_run(engine, run_id)
+    assert run.status == RunStatus.success
+    assert run.check_status.value == "passed"
+
+
+async def test_step12_check_failure_nonfatal(engine):
+    from app.db.models import CheckMode
+
+    await _setup_job(engine, check_enabled=True, check_mode=CheckMode.structural)
+    run_id = str(uuid.uuid4())
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    from app.db.models import BackupRun, RunStatus, TriggeredBy
+
+    async with factory() as s:
+        run = BackupRun(
+            id=run_id,
+            job_id=str(JOB_ID),
+            status=RunStatus.running,
+            triggered_by=TriggeredBy.manual,
+            started_at=datetime.now(timezone.utc),
+        )
+        s.add(run)
+        await s.commit()
+
+    with (
+        patch("app.services.restic.restic_cat_config", return_value=(0, "{}", "")),
+        patch(
+            "app.services.restic.restic_backup",
+            return_value=(0, json.dumps(BACKUP_SUMMARY), "", BACKUP_SUMMARY),
+        ),
+        patch("app.services.restic.restic_prune", return_value=(0, "", "")),
+        patch("app.services.restic.restic_snapshots", return_value=(0, [], "")),
+        patch(
+            "app.services.restic.restic_check", return_value=(1, "", "corrupted pack")
+        ),
+        patch("app.services.notifications.send_notification"),
+    ):
+        await run_backup(JOB_ID, uuid.UUID(run_id))
+
+    run = await _get_run(engine, run_id)
+    assert run.status == RunStatus.success
+    assert run.check_status.value == "failed"
+    assert run.check_error_output is not None
+
+
+# ── Concurrent run guard ──────────────────────────────────────────────────────
+
+
+async def test_active_jobs_cleared_after_completion(engine):
+    await _setup_job(engine)
+    run_id = str(uuid.uuid4())
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    from app.db.models import BackupRun, RunStatus, TriggeredBy
+
+    async with factory() as s:
+        run = BackupRun(
+            id=run_id,
+            job_id=str(JOB_ID),
+            status=RunStatus.running,
+            triggered_by=TriggeredBy.manual,
+            started_at=datetime.now(timezone.utc),
+        )
+        s.add(run)
+        await s.commit()
+
+    with (
+        patch("app.services.restic.restic_cat_config", return_value=(0, "{}", "")),
+        patch(
+            "app.services.restic.restic_backup",
+            return_value=(0, json.dumps(BACKUP_SUMMARY), "", BACKUP_SUMMARY),
+        ),
+        patch("app.services.restic.restic_prune", return_value=(0, "", "")),
+        patch("app.services.restic.restic_snapshots", return_value=(0, [], "")),
+        patch("app.services.notifications.send_notification"),
+    ):
+        await run_backup(JOB_ID, uuid.UUID(run_id))
+
+    assert JOB_ID not in _active_jobs
+
+
+async def test_active_jobs_cleared_after_failure(engine):
+    await _setup_job(engine, restic_password="")
+    run_id = str(uuid.uuid4())
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    from app.db.models import BackupRun, RunStatus, TriggeredBy
+
+    async with factory() as s:
+        run = BackupRun(
+            id=run_id,
+            job_id=str(JOB_ID),
+            status=RunStatus.running,
+            triggered_by=TriggeredBy.manual,
+            started_at=datetime.now(timezone.utc),
+        )
+        s.add(run)
+        await s.commit()
+
+    await run_backup(JOB_ID, uuid.UUID(run_id))
+    assert JOB_ID not in _active_jobs
+
+
+# ── Notification checks ───────────────────────────────────────────────────────
+
+
+async def test_step3_notification_sent_on_start(engine):
+    await _setup_job(engine)
+    from app.db.models import AppSettings
+
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as s:
+        settings = await s.get(AppSettings, 1)
+        settings.ntfy_topic = "my-topic"
+        await s.commit()
+
+    run_id = str(uuid.uuid4())
+    from app.db.models import BackupRun, RunStatus, TriggeredBy
+
+    async with factory() as s:
+        run = BackupRun(
+            id=run_id,
+            job_id=str(JOB_ID),
+            status=RunStatus.running,
+            triggered_by=TriggeredBy.manual,
+            started_at=datetime.now(timezone.utc),
+        )
+        s.add(run)
+        await s.commit()
+
+    notify_calls = []
+
+    async def fake_notify(*args, **kwargs):
+        notify_calls.append({"args": args, "kwargs": kwargs})
+
+    with (
+        patch("app.services.restic.restic_cat_config", return_value=(0, "{}", "")),
+        patch(
+            "app.services.restic.restic_backup",
+            return_value=(0, json.dumps(BACKUP_SUMMARY), "", BACKUP_SUMMARY),
+        ),
+        patch("app.services.restic.restic_prune", return_value=(0, "", "")),
+        patch("app.services.restic.restic_snapshots", return_value=(0, [], "")),
+        patch("app.services.notifications.send_notification", side_effect=fake_notify),
+    ):
+        await run_backup(JOB_ID, uuid.UUID(run_id))
+
+    assert len(notify_calls) >= 1
+
+
+async def test_notification_skipped_when_topic_empty(engine):
+    await _setup_job(engine)
+
+    run_id = str(uuid.uuid4())
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    from app.db.models import BackupRun, RunStatus, TriggeredBy
+
+    async with factory() as s:
+        run = BackupRun(
+            id=run_id,
+            job_id=str(JOB_ID),
+            status=RunStatus.running,
+            triggered_by=TriggeredBy.manual,
+            started_at=datetime.now(timezone.utc),
+        )
+        s.add(run)
+        await s.commit()
+
+    notify_calls = []
+
+    async def fake_notify(*args, **kwargs):
+        notify_calls.append(True)
+
+    with (
+        patch("app.services.restic.restic_cat_config", return_value=(0, "{}", "")),
+        patch(
+            "app.services.restic.restic_backup",
+            return_value=(0, json.dumps(BACKUP_SUMMARY), "", BACKUP_SUMMARY),
+        ),
+        patch("app.services.restic.restic_prune", return_value=(0, "", "")),
+        patch("app.services.restic.restic_snapshots", return_value=(0, [], "")),
+        patch("app.services.notifications.send_notification", side_effect=fake_notify),
+    ):
+        await run_backup(JOB_ID, uuid.UUID(run_id))
+
+    assert len(notify_calls) == 0
+
+
+# ── run_backup called without run_id (scheduler invocation) ──────────────────
+
+
+async def test_run_backup_without_run_id_creates_run_row(engine):
+    from sqlalchemy import select
+
+    await _setup_job(engine)
+
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    with (
+        patch("app.services.restic.restic_cat_config", return_value=(0, "{}", "")),
+        patch(
+            "app.services.restic.restic_backup",
+            return_value=(0, json.dumps(BACKUP_SUMMARY), "", BACKUP_SUMMARY),
+        ),
+        patch("app.services.restic.restic_prune", return_value=(0, "", "")),
+        patch("app.services.restic.restic_snapshots", return_value=(0, [], "")),
+        patch("app.services.notifications.send_notification"),
+    ):
+        await run_backup(JOB_ID)
+
+    from app.db.models import BackupRun
+
+    async with factory() as s:
+        result = await s.execute(
+            select(BackupRun).where(BackupRun.job_id == str(JOB_ID))
+        )
+        runs = result.scalars().all()
+    assert len(runs) == 1
+    assert runs[0].status.value == "success"
+
+
+async def test_run_backup_without_run_id_job_not_found_is_noop(engine):
+    unknown_id = uuid.uuid4()
+    await run_backup(unknown_id)
+    assert unknown_id not in _active_jobs
+
+
+# ── Step 6: source path construction ─────────────────────────────────────────
+
+
+async def test_step6_source_path_uses_source_label(engine):
+    await _setup_job(engine, source_label="documents")
+    run_id = str(uuid.uuid4())
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    from app.db.models import BackupRun, RunStatus, TriggeredBy
+
+    async with factory() as s:
+        run = BackupRun(
+            id=run_id,
+            job_id=str(JOB_ID),
+            status=RunStatus.running,
+            triggered_by=TriggeredBy.manual,
+            started_at=datetime.now(timezone.utc),
+        )
+        s.add(run)
+        await s.commit()
+
+    captured = {}
+
+    async def fake_backup(repo, password, source_path, **kwargs):
+        captured["source_path"] = source_path
+        return (0, json.dumps(BACKUP_SUMMARY), "", BACKUP_SUMMARY)
+
+    with (
+        patch("app.services.restic.restic_cat_config", return_value=(0, "{}", "")),
+        patch("app.services.restic.restic_backup", side_effect=fake_backup),
+        patch("app.services.restic.restic_prune", return_value=(0, "", "")),
+        patch("app.services.restic.restic_snapshots", return_value=(0, [], "")),
+        patch("app.services.notifications.send_notification"),
+    ):
+        await run_backup(JOB_ID, uuid.UUID(run_id))
+
+    assert captured["source_path"] == "/sources/documents"
+
+
+async def test_step6_source_subpath_appended_to_source_path(engine):
+    await _setup_job(engine, source_label="documents", source_subpath="photos")
+    run_id = str(uuid.uuid4())
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    from app.db.models import BackupRun, RunStatus, TriggeredBy
+
+    async with factory() as s:
+        run = BackupRun(
+            id=run_id,
+            job_id=str(JOB_ID),
+            status=RunStatus.running,
+            triggered_by=TriggeredBy.manual,
+            started_at=datetime.now(timezone.utc),
+        )
+        s.add(run)
+        await s.commit()
+
+    captured = {}
+
+    async def fake_backup(repo, password, source_path, **kwargs):
+        captured["source_path"] = source_path
+        return (0, json.dumps(BACKUP_SUMMARY), "", BACKUP_SUMMARY)
+
+    with (
+        patch("app.services.restic.restic_cat_config", return_value=(0, "{}", "")),
+        patch("app.services.restic.restic_backup", side_effect=fake_backup),
+        patch("app.services.restic.restic_prune", return_value=(0, "", "")),
+        patch("app.services.restic.restic_snapshots", return_value=(0, [], "")),
+        patch("app.services.notifications.send_notification"),
+    ):
+        await run_backup(JOB_ID, uuid.UUID(run_id))
+
+    assert captured["source_path"] == "/sources/documents/photos"
+
+
+async def test_step6_repo_path_uses_destination_label(engine):
+    await _setup_job(engine, destination_label="offsite")
+    run_id = str(uuid.uuid4())
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    from app.db.models import BackupRun, RunStatus, TriggeredBy
+
+    async with factory() as s:
+        run = BackupRun(
+            id=run_id,
+            job_id=str(JOB_ID),
+            status=RunStatus.running,
+            triggered_by=TriggeredBy.manual,
+            started_at=datetime.now(timezone.utc),
+        )
+        s.add(run)
+        await s.commit()
+
+    captured = {}
+
+    async def fake_cat_config(repo, password):
+        captured["repo"] = repo
+        return (0, "{}", "")
+
+    with (
+        patch("app.services.restic.restic_cat_config", side_effect=fake_cat_config),
+        patch(
+            "app.services.restic.restic_backup",
+            return_value=(0, json.dumps(BACKUP_SUMMARY), "", BACKUP_SUMMARY),
+        ),
+        patch("app.services.restic.restic_prune", return_value=(0, "", "")),
+        patch("app.services.restic.restic_snapshots", return_value=(0, [], "")),
+        patch("app.services.notifications.send_notification"),
+    ):
+        await run_backup(JOB_ID, uuid.UUID(run_id))
+
+    assert "offsite" in captured["repo"]
+
+
+# ── Notification behavior ─────────────────────────────────────────────────────
+
+
+async def test_step11_failure_notification_sent(engine):
+    await _setup_job(engine)
+    from app.db.models import AppSettings
+
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as s:
+        settings = await s.get(AppSettings, 1)
+        settings.ntfy_topic = "alerts"
+        await s.commit()
+
+    run_id = str(uuid.uuid4())
+    from app.db.models import BackupRun, RunStatus, TriggeredBy
+
+    async with factory() as s:
+        run = BackupRun(
+            id=run_id,
+            job_id=str(JOB_ID),
+            status=RunStatus.running,
+            triggered_by=TriggeredBy.manual,
+            started_at=datetime.now(timezone.utc),
+        )
+        s.add(run)
+        await s.commit()
+
+    notify_calls = []
+
+    async def fake_notify(*args, **kwargs):
+        notify_calls.append({"args": args, "kwargs": kwargs})
+
+    with (
+        patch(
+            "app.services.restic.restic_cat_config",
+            return_value=(0, "{}", ""),
+        ),
+        patch(
+            "app.services.restic.restic_backup",
+            return_value=(1, "", "fatal: disk full", None),
+        ),
+        patch("app.services.notifications.send_notification", side_effect=fake_notify),
+    ):
+        await run_backup(JOB_ID, uuid.UUID(run_id))
+
+    assert len(notify_calls) >= 1
+
+
+async def test_notify_on_success_false_skips_success_notification(engine):
+    await _setup_job(engine)
+    from app.db.models import AppSettings
+
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as s:
+        settings = await s.get(AppSettings, 1)
+        settings.ntfy_topic = "alerts"
+        settings.notify_on_success = False
+        settings.notify_on_start = False
+        await s.commit()
+
+    run_id = str(uuid.uuid4())
+    from app.db.models import BackupRun, RunStatus, TriggeredBy
+
+    async with factory() as s:
+        run = BackupRun(
+            id=run_id,
+            job_id=str(JOB_ID),
+            status=RunStatus.running,
+            triggered_by=TriggeredBy.manual,
+            started_at=datetime.now(timezone.utc),
+        )
+        s.add(run)
+        await s.commit()
+
+    notify_calls = []
+
+    async def fake_notify(*args, **kwargs):
+        notify_calls.append(True)
+
+    with (
+        patch("app.services.restic.restic_cat_config", return_value=(0, "{}", "")),
+        patch(
+            "app.services.restic.restic_backup",
+            return_value=(0, json.dumps(BACKUP_SUMMARY), "", BACKUP_SUMMARY),
+        ),
+        patch("app.services.restic.restic_prune", return_value=(0, "", "")),
+        patch("app.services.restic.restic_snapshots", return_value=(0, [], "")),
+        patch("app.services.notifications.send_notification", side_effect=fake_notify),
+    ):
+        await run_backup(JOB_ID, uuid.UUID(run_id))
+
+    assert len(notify_calls) == 0
+
+
+async def test_notify_on_failure_false_skips_failure_notification(engine):
+    await _setup_job(engine)
+    from app.db.models import AppSettings
+
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as s:
+        settings = await s.get(AppSettings, 1)
+        settings.ntfy_topic = "alerts"
+        settings.notify_on_failure = False
+        settings.notify_on_start = False
+        await s.commit()
+
+    run_id = str(uuid.uuid4())
+    from app.db.models import BackupRun, RunStatus, TriggeredBy
+
+    async with factory() as s:
+        run = BackupRun(
+            id=run_id,
+            job_id=str(JOB_ID),
+            status=RunStatus.running,
+            triggered_by=TriggeredBy.manual,
+            started_at=datetime.now(timezone.utc),
+        )
+        s.add(run)
+        await s.commit()
+
+    notify_calls = []
+
+    async def fake_notify(*args, **kwargs):
+        notify_calls.append(True)
+
+    with (
+        patch("app.services.restic.restic_cat_config", return_value=(0, "{}", "")),
+        patch(
+            "app.services.restic.restic_backup",
+            return_value=(1, "", "fatal: error", None),
+        ),
+        patch("app.services.notifications.send_notification", side_effect=fake_notify),
+    ):
+        await run_backup(JOB_ID, uuid.UUID(run_id))
+
+    assert len(notify_calls) == 0
+
+
+# ── Step 12: check mode details ───────────────────────────────────────────────
+
+
+async def test_step12_check_subset_passes_percent_to_restic(engine):
+    from app.db.models import CheckMode
+
+    await _setup_job(
+        engine, check_enabled=True, check_mode=CheckMode.subset, check_subset_percent=10
+    )
+    run_id = str(uuid.uuid4())
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    from app.db.models import BackupRun, RunStatus, TriggeredBy
+
+    async with factory() as s:
+        run = BackupRun(
+            id=run_id,
+            job_id=str(JOB_ID),
+            status=RunStatus.running,
+            triggered_by=TriggeredBy.manual,
+            started_at=datetime.now(timezone.utc),
+        )
+        s.add(run)
+        await s.commit()
+
+    captured = {}
+
+    async def fake_check(repo, password, mode, subset_percent, timeout_seconds):
+        captured["mode"] = mode
+        captured["subset_percent"] = subset_percent
+        return (0, "no errors", "")
+
+    with (
+        patch("app.services.restic.restic_cat_config", return_value=(0, "{}", "")),
+        patch(
+            "app.services.restic.restic_backup",
+            return_value=(0, json.dumps(BACKUP_SUMMARY), "", BACKUP_SUMMARY),
+        ),
+        patch("app.services.restic.restic_prune", return_value=(0, "", "")),
+        patch("app.services.restic.restic_snapshots", return_value=(0, [], "")),
+        patch("app.services.restic.restic_check", side_effect=fake_check),
+        patch("app.services.notifications.send_notification"),
+    ):
+        await run_backup(JOB_ID, uuid.UUID(run_id))
+
+    assert captured["mode"] == "subset"
+    assert captured["subset_percent"] == 10
+
+
+async def test_step12_check_full_mode_passed_correctly(engine):
+    from app.db.models import CheckMode
+
+    await _setup_job(engine, check_enabled=True, check_mode=CheckMode.full)
+    run_id = str(uuid.uuid4())
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    from app.db.models import BackupRun, RunStatus, TriggeredBy
+
+    async with factory() as s:
+        run = BackupRun(
+            id=run_id,
+            job_id=str(JOB_ID),
+            status=RunStatus.running,
+            triggered_by=TriggeredBy.manual,
+            started_at=datetime.now(timezone.utc),
+        )
+        s.add(run)
+        await s.commit()
+
+    captured = {}
+
+    async def fake_check(repo, password, mode, subset_percent, timeout_seconds):
+        captured["mode"] = mode
+        captured["subset_percent"] = subset_percent
+        return (0, "no errors", "")
+
+    with (
+        patch("app.services.restic.restic_cat_config", return_value=(0, "{}", "")),
+        patch(
+            "app.services.restic.restic_backup",
+            return_value=(0, json.dumps(BACKUP_SUMMARY), "", BACKUP_SUMMARY),
+        ),
+        patch("app.services.restic.restic_prune", return_value=(0, "", "")),
+        patch("app.services.restic.restic_snapshots", return_value=(0, [], "")),
+        patch("app.services.restic.restic_check", side_effect=fake_check),
+        patch("app.services.notifications.send_notification"),
+    ):
+        await run_backup(JOB_ID, uuid.UUID(run_id))
+
+    assert captured["mode"] == "full"
+    assert captured["subset_percent"] is None
+
+
+async def test_step12_check_uses_job_timeout(engine):
+    from app.db.models import CheckMode
+
+    await _setup_job(
+        engine,
+        check_enabled=True,
+        check_mode=CheckMode.structural,
+        check_timeout_hours=2,
+    )
+    run_id = str(uuid.uuid4())
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    from app.db.models import BackupRun, RunStatus, TriggeredBy
+
+    async with factory() as s:
+        run = BackupRun(
+            id=run_id,
+            job_id=str(JOB_ID),
+            status=RunStatus.running,
+            triggered_by=TriggeredBy.manual,
+            started_at=datetime.now(timezone.utc),
+        )
+        s.add(run)
+        await s.commit()
+
+    captured = {}
+
+    async def fake_check(repo, password, mode, subset_percent, timeout_seconds):
+        captured["timeout_seconds"] = timeout_seconds
+        return (0, "ok", "")
+
+    with (
+        patch("app.services.restic.restic_cat_config", return_value=(0, "{}", "")),
+        patch(
+            "app.services.restic.restic_backup",
+            return_value=(0, json.dumps(BACKUP_SUMMARY), "", BACKUP_SUMMARY),
+        ),
+        patch("app.services.restic.restic_prune", return_value=(0, "", "")),
+        patch("app.services.restic.restic_snapshots", return_value=(0, [], "")),
+        patch("app.services.restic.restic_check", side_effect=fake_check),
+        patch("app.services.notifications.send_notification"),
+    ):
+        await run_backup(JOB_ID, uuid.UUID(run_id))
+
+    assert captured["timeout_seconds"] == 2 * 3600

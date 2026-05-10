@@ -1,0 +1,5 @@
+node_modules/
+frontend/dist/
+package-lock.json
+backend/.pytest_cache/
+**/__pycache__/

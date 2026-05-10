@@ -71,3 +71,7 @@ logs/
 
 # OS
 Thumbs.db
+
+# AI tools
+CLAUDE.md
+GEMINI.md

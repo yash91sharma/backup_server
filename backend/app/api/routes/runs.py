@@ -1,1 +1,3 @@
-# GET /runs/recent (cross-job) and GET /runs/{id} (full detail with output fields)
+from fastapi import APIRouter
+
+router = APIRouter(prefix="/runs", tags=["runs"])
