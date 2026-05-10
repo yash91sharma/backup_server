@@ -1,0 +1,1 @@
+# Excludes .git, node_modules, __pycache__, dist, tests, and .env files from Docker build context
