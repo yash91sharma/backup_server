@@ -1,3 +1,424 @@
-from fastapi import APIRouter
+"""FastAPI routes for BackupJob CRUD and management sub-routes.
+
+All write operations that touch the scheduler use the module-level
+'scheduler' object from app.core.scheduler so that tests can patch it.
+"""
+
+import os
+import uuid
+from datetime import datetime, timezone
+from typing import List
+
+from apscheduler.jobstores.base import JobLookupError
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.api.deps import get_session
+from app.api.schemas.jobs import (
+    JobCreate,
+    JobResponse,
+    JobUpdate,
+    RunSummarySchema,
+    SnapshotResponse,
+)
+from app.core import scheduler as scheduler_module
+from app.db.models import (
+    BackupJob,
+    BackupRun,
+    RunReason,
+    RunStatus,
+    Snapshot,
+    TriggeredBy,
+)
+from app.services import backup_runner, restic
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
+
+# Default mount root paths.  Not patched by tests (tests patch os.path.isdir
+# globally), but kept here for consistency with the mounts module.
+_SOURCES_ROOT = "/sources"
+_DESTINATIONS_ROOT = "/destinations"
+
+
+# ── Private helpers ───────────────────────────────────────────────────────────
+
+
+async def _get_job_or_404(job_id: str, session: AsyncSession) -> BackupJob:
+    """Fetch a BackupJob by id or raise HTTP 404."""
+    job = await session.get(BackupJob, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    return job
+
+
+async def _has_successful_run(job_id: str, session: AsyncSession) -> bool:
+    """Return True if the job has at least one run with status=success."""
+    result = await session.execute(
+        select(BackupRun)
+        .where(BackupRun.job_id == job_id, BackupRun.status == RunStatus.success)
+        .limit(1)
+    )
+    return result.scalar_one_or_none() is not None
+
+
+async def _last_run(job_id: str, session: AsyncSession) -> RunSummarySchema | None:
+    """Return the most recent BackupRun for the job, or None."""
+    result = await session.execute(
+        select(BackupRun)
+        .where(BackupRun.job_id == job_id)
+        .order_by(BackupRun.started_at.desc())
+        .limit(1)
+    )
+    run = result.scalar_one_or_none()
+    return RunSummarySchema.model_validate(run) if run else None
+
+
+def _next_run_time(job_id: str) -> datetime | None:
+    """Look up the job's next scheduled fire time from APScheduler."""
+    sched_job = scheduler_module.scheduler.get_job(job_id)
+    return sched_job.next_run_time if sched_job else None
+
+
+async def _build_job_response(job: BackupJob, session: AsyncSession) -> dict:
+    """Assemble a JobResponse dict with computed fields injected."""
+    return {
+        **{c.key: getattr(job, c.key) for c in job.__table__.columns},
+        "restic_password": None,
+        "has_successful_run": await _has_successful_run(job.id, session),
+        "next_run_time": _next_run_time(job.id),
+        "last_run": await _last_run(job.id, session),
+    }
+
+
+def _validate_mounts(source_label: str, destination_label: str) -> None:
+    """Raise HTTP 422 if either mount directory does not exist."""
+    if not os.path.isdir(f"{_SOURCES_ROOT}/{source_label}"):
+        raise HTTPException(
+            status_code=422,
+            detail=f"Source mount '/sources/{source_label}' is not mounted",
+        )
+    if not os.path.isdir(f"{_DESTINATIONS_ROOT}/{destination_label}"):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Destination mount '/destinations/{destination_label}' is not mounted"
+            ),
+        )
+
+
+async def _check_duplicate(
+    source_label: str,
+    destination_label: str,
+    session: AsyncSession,
+    exclude_id: str | None = None,
+) -> None:
+    """Raise 409 if another job already uses the same (source, destination) pair."""
+    stmt = select(BackupJob).where(
+        BackupJob.source_label == source_label,
+        BackupJob.destination_label == destination_label,
+    )
+    if exclude_id:
+        stmt = stmt.where(BackupJob.id != exclude_id)
+    result = await session.execute(stmt)
+    if result.scalar_one_or_none():
+        raise HTTPException(
+            status_code=409,
+            detail="A job with the same source and destination already exists",
+        )
+
+
+def _register_in_scheduler(job: BackupJob) -> None:
+    """Register or replace the job in APScheduler (only when scheduler is running)."""
+    if not scheduler_module.scheduler.running:
+        return
+    from app.services.backup_runner import run_backup
+
+    trigger = scheduler_module.build_trigger(job.schedule_type, job.schedule_value)
+    scheduler_module.scheduler.add_job(
+        run_backup,
+        trigger=trigger,
+        args=[uuid.UUID(job.id)],
+        id=job.id,
+        replace_existing=True,
+    )
+
+
+def _remove_from_scheduler(job_id: str) -> None:
+    """Remove a job from APScheduler; silently ignore if not found."""
+    if not scheduler_module.scheduler.running:
+        return
+    try:
+        scheduler_module.scheduler.remove_job(job_id)
+    except JobLookupError:
+        pass
+
+
+# ── GET /api/jobs ─────────────────────────────────────────────────────────────
+
+
+@router.get("", response_model=List[JobResponse])
+async def list_jobs(session: AsyncSession = Depends(get_session)):
+    """Return all backup jobs with computed fields (next_run_time, last_run, etc.)."""
+    result = await session.execute(select(BackupJob))
+    jobs = result.scalars().all()
+    return [await _build_job_response(job, session) for job in jobs]
+
+
+# ── POST /api/jobs ────────────────────────────────────────────────────────────
+
+
+@router.post("", response_model=JobResponse, status_code=201)
+async def create_job(body: JobCreate, session: AsyncSession = Depends(get_session)):
+    """Create a new BackupJob.
+
+    Validates that both source and destination mounts exist, that no job with
+    the same (source_label, destination_label) pair already exists, and that
+    the schedule/check configuration is internally consistent (done by the
+    JobCreate schema).
+    """
+    _validate_mounts(body.source_label, body.destination_label)
+    await _check_duplicate(body.source_label, body.destination_label, session)
+
+    job = BackupJob(**body.model_dump())
+    session.add(job)
+    await session.commit()
+    await session.refresh(job)
+
+    if job.enabled:
+        _register_in_scheduler(job)
+
+    return await _build_job_response(job, session)
+
+
+# ── GET /api/jobs/{id} ────────────────────────────────────────────────────────
+
+
+@router.get("/{job_id}", response_model=JobResponse)
+async def get_job(job_id: str, session: AsyncSession = Depends(get_session)):
+    """Return a single BackupJob by id."""
+    job = await _get_job_or_404(job_id, session)
+    return await _build_job_response(job, session)
+
+
+# ── PUT /api/jobs/{id} ────────────────────────────────────────────────────────
+
+
+@router.put("/{job_id}", response_model=JobResponse)
+async def update_job(
+    job_id: str,
+    body: JobUpdate,
+    session: AsyncSession = Depends(get_session),
+):
+    """Update a BackupJob.
+
+    Enforces immutability rules:
+    - destination_label cannot be changed after creation.
+    - restic_password cannot be changed after the job has a successful run.
+    """
+    job = await _get_job_or_404(job_id, session)
+
+    # Destination label is permanently immutable.
+    if body.destination_label != job.destination_label:
+        raise HTTPException(
+            status_code=422,
+            detail="destination_label cannot be changed after job creation",
+        )
+
+    # Password is immutable once the restic repo has a successful backup.
+    if body.restic_password is not None and await _has_successful_run(job_id, session):
+        raise HTTPException(
+            status_code=422,
+            detail="restic_password cannot be changed after a successful backup run",
+        )
+
+    # Uniqueness check comes before mount validation so a conflict returns 409
+    # even when the mount is not present (avoids a misleading 422).
+    await _check_duplicate(
+        body.source_label, body.destination_label, session, exclude_id=job_id
+    )
+
+    # Re-validate source mount only when the label actually changes.
+    if body.source_label != job.source_label:
+        if not os.path.isdir(f"{_SOURCES_ROOT}/{body.source_label}"):
+            raise HTTPException(
+                status_code=422,
+                detail=f"Source mount '/sources/{body.source_label}' is not mounted",
+            )
+
+    # Apply all provided fields.
+    update_data = body.model_dump(exclude_none=True)
+    for field, value in update_data.items():
+        setattr(job, field, value)
+
+    job.updated_at = datetime.now(timezone.utc)
+    await session.commit()
+    await session.refresh(job)
+
+    # Reschedule if the job is registered.
+    if scheduler_module.scheduler.running:
+        existing = scheduler_module.scheduler.get_job(job_id)
+        if existing:
+            trigger = scheduler_module.build_trigger(
+                job.schedule_type, job.schedule_value
+            )
+            scheduler_module.scheduler.reschedule_job(job_id, trigger=trigger)
+
+    return await _build_job_response(job, session)
+
+
+# ── DELETE /api/jobs/{id} ─────────────────────────────────────────────────────
+
+
+@router.delete("/{job_id}", status_code=204)
+async def delete_job(job_id: str, session: AsyncSession = Depends(get_session)):
+    """Delete a BackupJob (and its runs/snapshots via CASCADE).
+
+    Returns 409 if a backup run is currently in progress for this job.
+    The restic repository on disk is NOT deleted.
+    """
+    job = await _get_job_or_404(job_id, session)
+
+    if uuid.UUID(job_id) in backup_runner._active_jobs:
+        raise HTTPException(
+            status_code=409,
+            detail="A backup run is in progress for this job",
+        )
+
+    _remove_from_scheduler(job_id)
+    await session.delete(job)
+    await session.commit()
+
+
+# ── POST /api/jobs/{id}/run ───────────────────────────────────────────────────
+
+
+@router.post("/{job_id}/run")
+async def trigger_run(
+    job_id: str,
+    background_tasks: BackgroundTasks,
+    session: AsyncSession = Depends(get_session),
+):
+    """Manually trigger a backup run for the given job.
+
+    If a run is already active for this job, a skipped run row is created and
+    returned immediately instead of firing a duplicate run.
+    """
+    job = await _get_job_or_404(job_id, session)
+    job_uuid = uuid.UUID(job.id)
+    now = datetime.now(timezone.utc)
+
+    if job_uuid in backup_runner._active_jobs:
+        # Record the skip so it appears in run history.
+        run = BackupRun(
+            id=str(uuid.uuid4()),
+            job_id=job.id,
+            status=RunStatus.skipped,
+            reason=RunReason.overlapping_run,
+            triggered_by=TriggeredBy.manual,
+            started_at=now,
+            finished_at=now,
+        )
+        session.add(run)
+        await session.commit()
+        return {"run_id": run.id}
+
+    run = BackupRun(
+        id=str(uuid.uuid4()),
+        job_id=job.id,
+        status=RunStatus.running,
+        triggered_by=TriggeredBy.manual,
+        started_at=now,
+    )
+    session.add(run)
+    await session.commit()
+
+    # Fire-and-forget: the route returns immediately with the run id.
+    background_tasks.add_task(backup_runner.run_backup, job_uuid, uuid.UUID(run.id))
+
+    return {"run_id": run.id}
+
+
+# ── POST /api/jobs/{id}/enable ────────────────────────────────────────────────
+
+
+@router.post("/{job_id}/enable")
+async def enable_job(job_id: str, session: AsyncSession = Depends(get_session)):
+    """Set enabled=True on the job and register it with the scheduler."""
+    job = await _get_job_or_404(job_id, session)
+    job.enabled = True
+    await session.commit()
+    _register_in_scheduler(job)
+    return {"id": job.id, "enabled": True}
+
+
+# ── POST /api/jobs/{id}/disable ───────────────────────────────────────────────
+
+
+@router.post("/{job_id}/disable")
+async def disable_job(job_id: str, session: AsyncSession = Depends(get_session)):
+    """Set enabled=False on the job and remove it from the scheduler."""
+    job = await _get_job_or_404(job_id, session)
+    job.enabled = False
+    await session.commit()
+    _remove_from_scheduler(job_id)
+    return {"id": job.id, "enabled": False}
+
+
+# ── POST /api/jobs/{id}/unlock ────────────────────────────────────────────────
+
+
+@router.post("/{job_id}/unlock")
+async def unlock_job(job_id: str, session: AsyncSession = Depends(get_session)):
+    """Run 'restic unlock' on the job's repository.
+
+    Returns 409 if a backup run is currently active (the lock may be in use).
+    """
+    job = await _get_job_or_404(job_id, session)
+
+    if uuid.UUID(job_id) in backup_runner._active_jobs:
+        raise HTTPException(
+            status_code=409,
+            detail="A backup run is in progress for this job",
+        )
+
+    repo_path = f"{_DESTINATIONS_ROOT}/{job.destination_label}/{job.id}"
+    _rc, stdout, stderr = await restic.restic_unlock(
+        repo_path=repo_path, password=job.restic_password
+    )
+
+    return {"output": stdout or stderr}
+
+
+# ── GET /api/jobs/{id}/runs ───────────────────────────────────────────────────
+
+
+@router.get("/{job_id}/runs", response_model=List[RunSummarySchema])
+async def list_job_runs(job_id: str, session: AsyncSession = Depends(get_session)):
+    """Return all runs for a job ordered by started_at descending (newest first).
+
+    Output fields (backup_output, error_output, …) are excluded; use
+    GET /api/runs/{id} to fetch a run with full output.
+    """
+    await _get_job_or_404(job_id, session)
+    result = await session.execute(
+        select(BackupRun)
+        .where(BackupRun.job_id == job_id)
+        .order_by(BackupRun.started_at.desc())
+    )
+    return result.scalars().all()
+
+
+# ── GET /api/jobs/{id}/snapshots ──────────────────────────────────────────────
+
+
+@router.get("/{job_id}/snapshots", response_model=List[SnapshotResponse])
+async def list_job_snapshots(job_id: str, session: AsyncSession = Depends(get_session)):
+    """Return all restic snapshots for a job ordered by snapshot_time descending."""
+    await _get_job_or_404(job_id, session)
+    result = await session.execute(
+        select(Snapshot)
+        .where(Snapshot.job_id == job_id)
+        .order_by(Snapshot.snapshot_time.desc())
+    )
+    return result.scalars().all()

@@ -225,7 +225,14 @@ async def test_test_ntfy_success(client, engine):
     mock_response = AsyncMock()
     mock_response.status_code = 200
 
-    with patch("httpx.AsyncClient.post", return_value=mock_response):
+    # Patch the AsyncClient CLASS (not the instance method) so the
+    # TestClient (an already-created instance) is unaffected by the mock.
+    # __aenter__.return_value = mock_http makes `async with client as c` yield
+    # mock_http itself rather than a new child AsyncMock.
+    mock_http = AsyncMock()
+    mock_http.__aenter__.return_value = mock_http
+    mock_http.post.return_value = mock_response
+    with patch("httpx.AsyncClient", return_value=mock_http):
         resp = await client.post("/api/settings/test-ntfy")
     assert resp.status_code == 200
     assert resp.json()["ok"] is True
@@ -255,7 +262,10 @@ async def test_test_ntfy_failure_returns_ok_false(client, engine):
     mock_response.status_code = 403
     mock_response.text = "Unauthorized"
 
-    with patch("httpx.AsyncClient.post", return_value=mock_response):
+    mock_http = AsyncMock()
+    mock_http.__aenter__.return_value = mock_http
+    mock_http.post.return_value = mock_response
+    with patch("httpx.AsyncClient", return_value=mock_http):
         resp = await client.post("/api/settings/test-ntfy")
     assert resp.status_code == 200
     assert resp.json()["ok"] is False
@@ -287,11 +297,14 @@ async def test_restic_update_check_up_to_date(client, engine):
         await s.commit()
 
     github_response = {"tag_name": "v0.17.3"}
-    mock_resp = AsyncMock()
+    mock_resp = MagicMock()
     mock_resp.status_code = 200
     mock_resp.json = MagicMock(return_value=github_response)
 
-    with patch("httpx.AsyncClient.get", return_value=mock_resp):
+    mock_http = AsyncMock()
+    mock_http.__aenter__.return_value = mock_http
+    mock_http.get.return_value = mock_resp
+    with patch("httpx.AsyncClient", return_value=mock_http):
         resp = await client.get("/api/settings/restic-update-check")
     assert resp.status_code == 200
     data = resp.json()
@@ -322,11 +335,14 @@ async def test_restic_update_check_update_available(client, engine):
         await s.commit()
 
     github_response = {"tag_name": "v0.17.3"}
-    mock_resp = AsyncMock()
+    mock_resp = MagicMock()
     mock_resp.status_code = 200
     mock_resp.json = MagicMock(return_value=github_response)
 
-    with patch("httpx.AsyncClient.get", return_value=mock_resp):
+    mock_http = AsyncMock()
+    mock_http.__aenter__.return_value = mock_http
+    mock_http.get.return_value = mock_resp
+    with patch("httpx.AsyncClient", return_value=mock_http):
         resp = await client.get("/api/settings/restic-update-check")
     assert resp.status_code == 200
     data = resp.json()
@@ -354,7 +370,10 @@ async def test_restic_update_check_github_unreachable(client, engine):
             s.add(settings)
         await s.commit()
 
-    with patch("httpx.AsyncClient.get", side_effect=httpx.TimeoutException("timeout")):
+    mock_http = AsyncMock()
+    mock_http.__aenter__.return_value = mock_http
+    mock_http.get.side_effect = httpx.TimeoutException("timeout")
+    with patch("httpx.AsyncClient", return_value=mock_http):
         resp = await client.get("/api/settings/restic-update-check")
     assert resp.status_code == 200
     data = resp.json()

@@ -17,13 +17,15 @@ async def _insert_settings(engine, **overrides):
     async with factory() as s:
         existing = await s.get(AppSettings, 1)
         if existing is None:
-            settings = AppSettings(
-                id=1,
-                ntfy_server_url="https://ntfy.sh",
-                ntfy_topic="",
-                default_job_timeout_hours=24,
-                **overrides,
-            )
+            # Build base defaults then apply overrides to avoid duplicate kwargs.
+            base = {
+                "id": 1,
+                "ntfy_server_url": "https://ntfy.sh",
+                "ntfy_topic": "",
+                "default_job_timeout_hours": 24,
+            }
+            base.update(overrides)
+            settings = AppSettings(**base)
             s.add(settings)
         else:
             for k, v in overrides.items():
