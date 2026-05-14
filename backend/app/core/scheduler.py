@@ -17,7 +17,6 @@ from apscheduler.triggers.interval import IntervalTrigger
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
-# Imported at module level so tests can patch 'app.core.scheduler.engine'.
 from app.db.database import engine
 from app.db.models import (
     AppSettings,
@@ -28,6 +27,8 @@ from app.db.models import (
     RunReason,
     RunStatus,
 )
+from app.services import restic as restic_svc
+from app.services.backup_runner import run_backup
 
 scheduler = AsyncIOScheduler(
     job_defaults={"misfire_grace_time": 3600, "coalesce": True},
@@ -72,9 +73,6 @@ async def start_scheduler() -> None:
     5. Register every enabled BackupJob with the scheduler.
     6. Start the scheduler (skipped if it is already running).
     """
-    # Lazy import to allow test patching of the service module.
-    from app.services import restic as restic_svc
-
     factory = async_sessionmaker(engine, expire_on_commit=False)
 
     async with factory() as session:
@@ -133,13 +131,7 @@ async def start_scheduler() -> None:
 
 
 def _register_job(job: BackupJob) -> None:
-    """Add a single BackupJob to the scheduler.
-
-    The backup_runner module is imported lazily here to avoid circular
-    imports at module load time.
-    """
-    from app.services.backup_runner import run_backup
-
+    """Add a single BackupJob to the scheduler."""
     trigger = build_trigger(job.schedule_type, job.schedule_value)
     scheduler.add_job(
         run_backup,

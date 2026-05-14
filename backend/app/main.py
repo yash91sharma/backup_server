@@ -17,14 +17,13 @@ from fastapi.staticfiles import StaticFiles
 
 from app.api.routes import jobs, mounts, runs
 from app.api.routes import settings as settings_router
+from app.core.logging import RequestLoggingMiddleware, setup_logging
+from app.core.scheduler import shutdown_scheduler, start_scheduler
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Run startup tasks (logging, scheduler) then yield for the app lifetime."""
-    from app.core.logging import setup_logging
-    from app.core.scheduler import shutdown_scheduler, start_scheduler
-
     setup_logging()
     await start_scheduler()
     yield
@@ -53,7 +52,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     so they can do substring checks like 'assert "field" in detail.lower()'.
     """
     errors = exc.errors()
-    parts = []
+    parts: list[str] = []
     for e in errors:
         # loc is a tuple like ('body', 'field_name') or ('body',) for model errors.
         loc = ".".join(str(s) for s in e["loc"] if s != "body")
@@ -62,8 +61,6 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     detail = "; ".join(parts)
     return JSONResponse(status_code=422, content={"detail": detail})
 
-
-from app.core.logging import RequestLoggingMiddleware  # noqa: E402
 
 app.add_middleware(RequestLoggingMiddleware)
 
