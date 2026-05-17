@@ -1,0 +1,76 @@
+@import 'tw-animate-css';
+@import 'shadcn/tailwind.css';
+@import '@fontsource-variable/geist';
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* Light theme - light grayish background with blue tones */
+    --background: 0 0% 98%;
+    --foreground: 210 10% 12%;
+    --card: 0 0% 100%;
+    --card-foreground: 210 10% 12%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 210 10% 12%;
+    --primary: 215 100% 50%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 213 94% 68%;
+    --secondary-foreground: 210 10% 12%;
+    --muted: 210 10% 85%;
+    --muted-foreground: 210 5% 40%;
+    --accent: 215 100% 50%;
+    --accent-foreground: 0 0% 100%;
+    --destructive: 0 84% 60%;
+    --success: 142 72% 29%;
+    --success-foreground: 0 0% 100%;
+    --warning: 38 92% 50%;
+    --warning-foreground: 210 10% 12%;
+    --border: 210 10% 90%;
+    --input: 210 10% 95%;
+    --ring: 215 100% 50%;
+    --radius: 0.5rem;
+  }
+
+  .dark {
+    /* Dark theme */
+    --background: 210 15% 10%;
+    --foreground: 210 15% 95%;
+    --card: 210 15% 15%;
+    --card-foreground: 210 15% 95%;
+    --popover: 210 15% 15%;
+    --popover-foreground: 210 15% 95%;
+    --primary: 215 97% 65%;
+    --primary-foreground: 210 15% 10%;
+    --secondary: 213 94% 68%;
+    --secondary-foreground: 210 15% 10%;
+    --muted: 210 15% 35%;
+    --muted-foreground: 210 10% 65%;
+    --accent: 215 97% 65%;
+    --accent-foreground: 210 15% 10%;
+    --destructive: 0 91% 71%;
+    --success: 142 76% 36%;
+    --success-foreground: 0 0% 100%;
+    --warning: 38 92% 50%;
+    --warning-foreground: 0 0% 0%;
+    --border: 210 15% 25%;
+    --input: 210 15% 20%;
+    --ring: 215 97% 65%;
+  }
+
+  * {
+    border-color: hsl(var(--border));
+  }
+
+  body {
+    background-color: hsl(var(--background));
+    color: hsl(var(--foreground));
+    font-family: 'Geist Variable', sans-serif;
+  }
+
+  html {
+    scroll-behavior: smooth;
+    font-family: 'Geist Variable', sans-serif;
+  }
+}

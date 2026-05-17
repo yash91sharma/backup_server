@@ -159,6 +159,7 @@ Every function uses `asyncio.create_subprocess_exec` and passes these env vars: 
 Implements the 12-step lifecycle. Uses `LoggerAdapter` with `job_id` + `run_id` on every log line. All restic calls go through `app.services.restic` module reference (not direct imports) so tests can patch them. DB sessions are opened via `async_sessionmaker(engine)` where `engine` is imported from `app.db.database` at module level.
 
 **Type checking improvements:**
+
 - [x] Added explicit type hints to all intermediate variables before SQLAlchemy ORM attribute assignment (e.g., `now_utc: datetime` before assigning to `failed_run.finished_at`)
 - [x] Replaced variable redeclarations and shadowing with direct assignments (removed `prune_status`, `check_status`, `skip_status`, `final_status_success`, `final_check_skip`, `check_passed`, `check_failed` intermediate variables where unused)
 - [x] Standardised SQLAlchemy ORM attribute assignments with `# type: ignore[assignment]` comments (industry standard due to SQLAlchemy descriptor limitations)
@@ -285,10 +286,10 @@ Implements the 12-step lifecycle. Uses `LoggerAdapter` with `job_id` + `run_id` 
 
 ### 6.1 shadcn/ui installation
 
-- [ ] Install shadcn/ui CLI and initialise (`npx shadcn-ui@latest init`)
-- [ ] Add components used across all pages: `Button`, `Card`, `CardHeader`, `CardContent`, `Input`, `Label`, `Select`, `Checkbox`, `Switch`, `Badge`, `Tabs`, `TabsList`, `TabsTrigger`, `TabsContent`, `Dialog`, `DialogTrigger`, `DialogContent`, `Collapsible`, `CollapsibleTrigger`, `CollapsibleContent`, `Separator`, `Tooltip`, `Toast`, `Toaster`
-- [ ] Add `Sonner` (or shadcn Toast) for toast notifications
-- [ ] Confirm build passes: `npm run build`
+- [x] Install shadcn/ui CLI and initialise (`npx shadcn-ui@latest init`)
+- [x] Add components used across all pages: `Button`, `Card`, `CardHeader`, `CardContent`, `Input`, `Label`, `Select`, `Checkbox`, `Switch`, `Badge`, `Tabs`, `TabsList`, `TabsTrigger`, `TabsContent`, `Dialog`, `DialogTrigger`, `DialogContent`, `Collapsible`, `CollapsibleTrigger`, `CollapsibleContent`, `Separator`, `Tooltip`, `Toast`, `Toaster`
+- [x] Add `Sonner` (or shadcn Toast) for toast notifications
+- [x] Confirm build passes: `npm run build`
 
 ---
 
@@ -564,24 +565,24 @@ All logs carry `abc1234567f8`, making the entire transaction traceable with: `gr
 
 ## Summary
 
-| Area                              | Done      | Remaining                         |
-| --------------------------------- | --------- | --------------------------------- |
-| DB models & engine                | 6/6       | 0                                 |
-| Alembic migration                 | 3/3       | 0                                 |
-| Core (logging, scheduler, config) | 10/10     | 0                                 |
-| API schemas                       | 12/12     | 0                                 |
-| API routes                        | 18/18     | 0                                 |
-| Main.py wiring                    | 7/7       | 0                                 |
-| `restic.py` functions             | 9/9       | 0                                 |
-| `backup_runner.py` steps          | 21/21     | 0                                 |
-| Backend route-layer tests         | 157/157   | 0                                 |
-| Backend service-layer tests       | 73/73     | 0                                 |
-| **Backend Total**                 | **230/230** | **0** ✅                         |
-| Frontend shadcn/ui setup          | 0/4       | 4                                 |
-| Frontend components               | 0/30      | 30                                |
-| Frontend pages                    | 0/47      | 47                                |
-| Frontend tests                    | 0/9 files | 9 test files                      |
-| Dockerfile                        | 0/6       | 6                                 |
-| docker-compose production         | 0/5       | 5                                 |
-| E2E smoke test                    | 0/5       | 5                                 |
-| Polish & docs                     | 0/7       | 7                                 |
+| Area                              | Done        | Remaining    |
+| --------------------------------- | ----------- | ------------ |
+| DB models & engine                | 6/6         | 0            |
+| Alembic migration                 | 3/3         | 0            |
+| Core (logging, scheduler, config) | 10/10       | 0            |
+| API schemas                       | 12/12       | 0            |
+| API routes                        | 18/18       | 0            |
+| Main.py wiring                    | 7/7         | 0            |
+| `restic.py` functions             | 9/9         | 0            |
+| `backup_runner.py` steps          | 21/21       | 0            |
+| Backend route-layer tests         | 157/157     | 0            |
+| Backend service-layer tests       | 73/73       | 0            |
+| **Backend Total**                 | **230/230** | **0** ✅     |
+| Frontend shadcn/ui setup          | 4/4         | 0            |
+| Frontend components               | 0/30        | 30           |
+| Frontend pages                    | 0/47        | 47           |
+| Frontend tests                    | 0/9 files   | 9 test files |
+| Dockerfile                        | 0/6         | 6            |
+| docker-compose production         | 0/5         | 5            |
+| E2E smoke test                    | 0/5         | 5            |
+| Polish & docs                     | 0/7         | 7            |
