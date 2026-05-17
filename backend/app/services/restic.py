@@ -1,49 +1,304 @@
-from typing import Optional, Tuple
+import asyncio
+import json
+import os
+import re
+from typing import Any, Dict, List, Optional, Tuple
+
+from app.core.logging import get_logger, log_call
+
+logger = get_logger(__name__)
 
 
+@log_call
 async def restic_version() -> Optional[str]:
-    return None
+    """Parse restic version. Returns None on any failure."""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "restic",
+            "version",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=10)
+        except asyncio.TimeoutError:
+            proc.kill()
+            return None
+
+        output = stdout.decode()
+        match = re.search(r"restic\s+([0-9.]+)", output)
+        return match.group(1) if match else None
+    except Exception:
+        return None
 
 
+@log_call
 async def restic_cat_config(repo_path: str, password: str) -> Tuple[int, str, str]:
-    return (-1, "", "not implemented")
+    """Check repo exists and password correct."""
+    env: Dict[str, str] = {
+        **os.environ,
+        "RESTIC_REPOSITORY": repo_path,
+        "RESTIC_PASSWORD": password,
+        "RESTIC_CACHE_DIR": "/app/data/restic-cache",
+    }
+    proc = await asyncio.create_subprocess_exec(
+        "restic",
+        "cat",
+        "config",
+        env=env,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await proc.communicate()
+    assert proc.returncode is not None
+    return proc.returncode, stdout.decode(), stderr.decode()
 
 
+@log_call
 async def restic_init(repo_path: str, password: str) -> Tuple[int, str, str]:
-    return (-1, "", "not implemented")
+    """Initialize a new restic repo."""
+    env: Dict[str, str] = {
+        **os.environ,
+        "RESTIC_REPOSITORY": repo_path,
+        "RESTIC_PASSWORD": password,
+        "RESTIC_CACHE_DIR": "/app/data/restic-cache",
+    }
+    proc = await asyncio.create_subprocess_exec(
+        "restic",
+        "init",
+        env=env,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await proc.communicate()
+    assert proc.returncode is not None
+    return proc.returncode, stdout.decode(), stderr.decode()
 
 
+@log_call
 async def restic_backup(
     repo_path: str,
     password: str,
     source_path: str,
     timeout_seconds: int,
-    **kwargs,
-) -> Tuple[int, str, str, Optional[dict]]:
-    return (-1, "", "not implemented", None)
+    **kwargs: Any,
+) -> Tuple[int, str, str, Optional[Dict[str, Any]]]:
+    """Run a backup."""
+    env: Dict[str, str] = {
+        **os.environ,
+        "RESTIC_REPOSITORY": repo_path,
+        "RESTIC_PASSWORD": password,
+        "RESTIC_CACHE_DIR": "/app/data/restic-cache",
+    }
+
+    args: List[str] = ["restic", "backup"]
+
+    # Add flags from kwargs
+    if kwargs.get("exclude_patterns"):
+        for pattern in kwargs["exclude_patterns"]:
+            args.extend(["--exclude", pattern])
+
+    if kwargs.get("exclude_caches"):
+        args.append("--exclude-caches")
+
+    if kwargs.get("exclude_if_present"):
+        for file in kwargs["exclude_if_present"]:
+            args.extend(["--exclude-if-present", file])
+
+    if kwargs.get("one_file_system"):
+        args.append("--one-file-system")
+
+    if kwargs.get("no_scan"):
+        args.append("--no-scan")
+
+    if kwargs.get("tags"):
+        for tag in kwargs["tags"]:
+            args.extend(["--tag", tag])
+
+    if kwargs.get("compression"):
+        args.extend(["--compression", kwargs["compression"]])
+
+    if kwargs.get("pack_size"):
+        args.extend(["--pack-size", str(kwargs["pack_size"])])
+
+    if kwargs.get("read_concurrency"):
+        args.extend(["--read-concurrency", str(kwargs["read_concurrency"])])
+
+    # Always add JSON and verbose
+    args.append("--json")
+    args.append("--verbose")
+
+    # Add source path
+    args.append(source_path)
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *args,
+            env=env,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            stdout, stderr = await asyncio.wait_for(
+                proc.communicate(), timeout=timeout_seconds
+            )
+        except asyncio.TimeoutError:
+            proc.kill()
+            return (-1, "", "backup timed out", None)
+    except Exception as e:
+        return (-1, "", str(e), None)
+
+    stdout_str: str = stdout.decode()
+    stderr_str: str = stderr.decode()
+
+    # Strip password from stdout
+    stdout_str = stdout_str.replace(password, "")
+
+    # Parse JSON summary from last line
+    summary: Optional[Dict[str, Any]] = None
+    assert proc.returncode is not None
+    if proc.returncode == 0:
+        for line in reversed(stdout_str.split("\n")):
+            if line.strip().startswith("{"):
+                try:
+                    summary = json.loads(line)
+                    break
+                except json.JSONDecodeError:
+                    pass
+
+    return proc.returncode, stdout_str, stderr_str, summary
 
 
-async def restic_snapshots(repo_path: str, password: str) -> Tuple[int, list, str]:
-    return (-1, [], "not implemented")
+@log_call
+async def restic_snapshots(repo_path: str, password: str) -> Tuple[int, List[Any], str]:
+    """List snapshots."""
+    env: Dict[str, str] = {
+        **os.environ,
+        "RESTIC_REPOSITORY": repo_path,
+        "RESTIC_PASSWORD": password,
+        "RESTIC_CACHE_DIR": "/app/data/restic-cache",
+    }
+    proc = await asyncio.create_subprocess_exec(
+        "restic",
+        "snapshots",
+        "--json",
+        env=env,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await proc.communicate()
+    stdout_str: str = stdout.decode()
+    stderr_str: str = stderr.decode()
+
+    snapshots: List[Any] = []
+    assert proc.returncode is not None
+    if proc.returncode == 0:
+        try:
+            snapshots = json.loads(stdout_str)
+        except json.JSONDecodeError:
+            pass
+
+    return proc.returncode, snapshots, stderr_str
 
 
+@log_call
 async def restic_forget_prune(
     repo_path: str,
     password: str,
     timeout_seconds: int,
-    **retention_flags,
+    **retention_flags: Any,
 ) -> Tuple[int, str, str]:
-    return (-1, "", "not implemented")
+    """Apply retention policy and prune."""
+    env: Dict[str, str] = {
+        **os.environ,
+        "RESTIC_REPOSITORY": repo_path,
+        "RESTIC_PASSWORD": password,
+        "RESTIC_CACHE_DIR": "/app/data/restic-cache",
+    }
+
+    args: List[str] = ["restic", "forget"]
+
+    # Map retention_flags kwargs to CLI arguments
+    flag_map: Dict[str, str] = {
+        "retain_keep_last": "--keep-last",
+        "retain_keep_hourly": "--keep-hourly",
+        "retain_keep_daily": "--keep-daily",
+        "retain_keep_weekly": "--keep-weekly",
+        "retain_keep_monthly": "--keep-monthly",
+        "retain_keep_yearly": "--keep-yearly",
+        "retain_keep_within": "--keep-within",
+        "retain_keep_within_hourly": "--keep-within-hourly",
+        "retain_keep_within_daily": "--keep-within-daily",
+        "retain_keep_within_weekly": "--keep-within-weekly",
+        "retain_keep_within_monthly": "--keep-within-monthly",
+        "retain_keep_within_yearly": "--keep-within-yearly",
+    }
+
+    for kwarg_name, flag_name in flag_map.items():
+        if kwarg_name in retention_flags and retention_flags[kwarg_name] is not None:
+            args.extend([flag_name, str(retention_flags[kwarg_name])])
+
+    # Always prune
+    args.append("--prune")
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *args,
+            env=env,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            stdout, stderr = await asyncio.wait_for(
+                proc.communicate(), timeout=timeout_seconds
+            )
+        except asyncio.TimeoutError:
+            proc.kill()
+            return (-1, "", "forget/prune timed out")
+    except Exception as e:
+        return (-1, "", str(e))
+
+    assert proc.returncode is not None
+    return proc.returncode, stdout.decode(), stderr.decode()
 
 
+@log_call
 async def restic_prune(
     repo_path: str,
     password: str,
     timeout_seconds: int,
 ) -> Tuple[int, str, str]:
-    return (-1, "", "not implemented")
+    """Standalone prune (no retention flags). Returns (returncode, stdout, stderr)."""
+    env: Dict[str, str] = {
+        **os.environ,
+        "RESTIC_REPOSITORY": repo_path,
+        "RESTIC_PASSWORD": password,
+        "RESTIC_CACHE_DIR": "/app/data/restic-cache",
+    }
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "restic",
+            "prune",
+            env=env,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            stdout, stderr = await asyncio.wait_for(
+                proc.communicate(), timeout=timeout_seconds
+            )
+        except asyncio.TimeoutError:
+            proc.kill()
+            return (-1, "", "prune timed out")
+    except Exception as e:
+        return (-1, "", str(e))
+
+    assert proc.returncode is not None
+    return proc.returncode, stdout.decode(), stderr.decode()
 
 
+@log_call
 async def restic_check(
     repo_path: str,
     password: str,
@@ -51,8 +306,59 @@ async def restic_check(
     subset_percent: Optional[int],
     timeout_seconds: int,
 ) -> Tuple[int, str, str]:
-    return (-1, "", "not implemented")
+    """Verify repo integrity."""
+    env: Dict[str, str] = {
+        **os.environ,
+        "RESTIC_REPOSITORY": repo_path,
+        "RESTIC_PASSWORD": password,
+        "RESTIC_CACHE_DIR": "/app/data/restic-cache",
+    }
+
+    args: List[str] = ["restic", "check"]
+
+    if mode == "full":
+        args.append("--read-data")
+    elif mode == "subset" and subset_percent is not None:
+        args.append(f"--read-data-subset={subset_percent}%")
+    # mode == "structural" needs no extra args
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *args,
+            env=env,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            stdout, stderr = await asyncio.wait_for(
+                proc.communicate(), timeout=timeout_seconds
+            )
+        except asyncio.TimeoutError:
+            proc.kill()
+            return (-1, "", "check timed out")
+    except Exception as e:
+        return (-1, "", str(e))
+
+    assert proc.returncode is not None
+    return proc.returncode, stdout.decode(), stderr.decode()
 
 
+@log_call
 async def restic_unlock(repo_path: str, password: str) -> Tuple[int, str, str]:
-    return (-1, "", "not implemented")
+    """Remove stale locks."""
+    env: Dict[str, str] = {
+        **os.environ,
+        "RESTIC_REPOSITORY": repo_path,
+        "RESTIC_PASSWORD": password,
+        "RESTIC_CACHE_DIR": "/app/data/restic-cache",
+    }
+    proc = await asyncio.create_subprocess_exec(
+        "restic",
+        "unlock",
+        env=env,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await proc.communicate()
+    assert proc.returncode is not None
+    return proc.returncode, stdout.decode(), stderr.decode()

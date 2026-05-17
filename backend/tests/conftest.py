@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, timezone
 from typing import AsyncGenerator
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 import pytest_asyncio
@@ -25,6 +25,13 @@ async def engine():
         await conn.run_sync(Base.metadata.create_all)
     yield eng
     await eng.dispose()
+
+
+@pytest.fixture(autouse=True)
+def _patch_backup_runner_engine(engine):
+    """Auto-patch backup_runner.engine with test engine for all tests."""
+    with patch("app.services.backup_runner.engine", engine):
+        yield
 
 
 @pytest_asyncio.fixture
