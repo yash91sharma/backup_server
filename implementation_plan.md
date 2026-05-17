@@ -144,15 +144,15 @@ Central planning document. Tick items as they are completed. Break nothing up fu
 
 Every function uses `asyncio.create_subprocess_exec` and passes these env vars: `RESTIC_PASSWORD=password`, `RESTIC_REPOSITORY=repo_path` (for all repo commands), `RESTIC_CACHE_DIR=/app/data/restic-cache`. Repo path is conveyed via env, not via `-r` flag. All use `proc.communicate()` (not separate stdout/stderr reads). On `asyncio.TimeoutError`, call `proc.kill()` and return a non-zero code with `"timed out"` in stderr — never re-raise. Never log the password.
 
-- [ ] `restic_version()` — run `restic version`; wrap communicate in `asyncio.wait_for`; parse `"restic X.Y.Z"` from stdout; return version string or `None` on any failure (non-zero rc, timeout, parse error)
-- [ ] `restic_cat_config(repo_path, password)` — run `restic cat config`; return `(rc, stdout, stderr)`; rc=0 means repo exists and password is correct; pass `RESTIC_REPOSITORY` in env
-- [ ] `restic_init(repo_path, password)` — run `restic init`; return `(rc, stdout, stderr)`
-- [ ] `restic_backup(repo_path, password, source_path, timeout_seconds, **kwargs)` — build CLI flags from kwargs: one `--exclude <pattern>` per entry in `exclude_patterns`; `--exclude-caches` if true; one `--exclude-if-present <file>` per entry; one `--tag <tag>` per entry in `tags`; `--one-file-system` if true; `--no-scan` if true; `--compression <val>` if set; `--pack-size <n>` if set; `--read-concurrency <n>` if set; always append `--json --verbose`; wrap in `asyncio.wait_for(timeout=timeout_seconds)`; on timeout call `proc.kill()` and return `(-1, "", "backup timed out", None)`; on rc != 0 return `(rc, stdout, stderr, None)`; on success parse the last JSON line of stdout into summary dict; **strip the password string from stdout before returning** (replace all occurrences); return `(rc, cleaned_stdout, stderr, summary_dict)`
-- [ ] `restic_snapshots(repo_path, password)` — run `restic snapshots --json`; parse JSON array from stdout; return `(rc, list_of_dicts, stderr)`; return `(rc, [], stderr)` on parse error
-- [ ] `restic_forget_prune(repo_path, password, timeout_seconds, **retention_flags)` — build `--keep-last`, `--keep-hourly`, `--keep-daily`, `--keep-weekly`, `--keep-monthly`, `--keep-yearly`, `--keep-within`, `--keep-within-hourly`, `--keep-within-daily`, `--keep-within-weekly`, `--keep-within-monthly`, `--keep-within-yearly` from non-null kwargs; always append `--prune`; wrap in `asyncio.wait_for`; on timeout return `(-1, "", "forget/prune timed out")`; return `(rc, stdout, stderr)`
-- [ ] `restic_prune(repo_path, password, timeout_seconds)` — run `restic prune`; wrap in `asyncio.wait_for`; return `(rc, stdout, stderr)` — must NOT include any `--keep-*` flags
-- [ ] `restic_check(repo_path, password, mode, subset_percent, timeout_seconds)` — `structural` → no extra args; `subset` → `--read-data-subset={subset_percent}%`; `full` → `--read-data`; wrap in `asyncio.wait_for`; return `(rc, stdout, stderr)`
-- [ ] `restic_unlock(repo_path, password)` — run `restic unlock`; pass `RESTIC_REPOSITORY` and `RESTIC_PASSWORD` in env; return `(rc, stdout, stderr)`
+- [x] `restic_version()` — run `restic version`; wrap communicate in `asyncio.wait_for`; parse `"restic X.Y.Z"` from stdout; return version string or `None` on any failure (non-zero rc, timeout, parse error); @log_call decorator applied
+- [x] `restic_cat_config(repo_path, password)` — run `restic cat config`; return `(rc, stdout, stderr)`; rc=0 means repo exists and password is correct; pass `RESTIC_REPOSITORY` in env; @log_call decorator applied
+- [x] `restic_init(repo_path, password)` — run `restic init`; return `(rc, stdout, stderr)`; @log_call decorator applied
+- [x] `restic_backup(repo_path, password, source_path, timeout_seconds, **kwargs)` — build CLI flags from kwargs: one `--exclude <pattern>` per entry in `exclude_patterns`; `--exclude-caches` if true; one `--exclude-if-present <file>` per entry; one `--tag <tag>` per entry in `tags`; `--one-file-system` if true; `--no-scan` if true; `--compression <val>` if set; `--pack-size <n>` if set; `--read-concurrency <n>` if set; always append `--json --verbose`; wrap in `asyncio.wait_for(timeout=timeout_seconds)`; on timeout call `proc.kill()` and return `(-1, "", "backup timed out", None)`; on rc != 0 return `(rc, stdout, stderr, None)`; on success parse the last JSON line of stdout into summary dict; **strip the password string from stdout before returning** (replace all occurrences); return `(rc, cleaned_stdout, stderr, summary_dict)`; @log_call decorator applied
+- [x] `restic_snapshots(repo_path, password)` — run `restic snapshots --json`; parse JSON array from stdout; return `(rc, list_of_dicts, stderr)`; return `(rc, [], stderr)` on parse error; @log_call decorator applied
+- [x] `restic_forget_prune(repo_path, password, timeout_seconds, **retention_flags)` — build `--keep-last`, `--keep-hourly`, `--keep-daily`, `--keep-weekly`, `--keep-monthly`, `--keep-yearly`, `--keep-within`, `--keep-within-hourly`, `--keep-within-daily`, `--keep-within-weekly`, `--keep-within-monthly`, `--keep-within-yearly` from non-null kwargs; always append `--prune`; wrap in `asyncio.wait_for`; on timeout return `(-1, "", "forget/prune timed out")`; return `(rc, stdout, stderr)`; @log_call decorator applied
+- [x] `restic_prune(repo_path, password, timeout_seconds)` — run `restic prune`; wrap in `asyncio.wait_for`; return `(rc, stdout, stderr)` — must NOT include any `--keep-*` flags; @log_call decorator applied
+- [x] `restic_check(repo_path, password, mode, subset_percent, timeout_seconds)` — `structural` → no extra args; `subset` → `--read-data-subset={subset_percent}%`; `full` → `--read-data`; wrap in `asyncio.wait_for`; return `(rc, stdout, stderr)`; @log_call decorator applied
+- [x] `restic_unlock(repo_path, password)` — run `restic unlock`; pass `RESTIC_REPOSITORY` and `RESTIC_PASSWORD` in env; return `(rc, stdout, stderr)`; @log_call decorator applied
 
 ### 4.2 Backup runner (`app/services/backup_runner.py`)
 
@@ -493,6 +493,66 @@ Implements the 12-step lifecycle. Uses `LoggerAdapter` with `job_id` + `run_id` 
 - [ ] Verify all 157 backend route-layer tests still pass after service layer is implemented
 - [ ] Verify all 74 backend service-layer tests pass after restic.py and backup_runner.py are implemented
 - [ ] Verify all frontend tests pass after all pages/components are implemented
+
+---
+
+## 12. Logging Enhancements — Request Traceability
+
+### 12.1 Problem Statement
+
+Current logging implementation logs function names, inputs, outputs, and HTTP requests, but lacks **request ID correlation**. Without a unique request ID propagated through the entire call stack, it's impossible to trace all logs from a single user request as it flows through multiple async functions. This makes debugging production issues difficult.
+
+Example problem: If a user triggers a backup, you can see "POST /api/jobs/123/run → 202", but then you cannot correlate the restic, prune, check, and notification logs that happen asynchronously 5 minutes later.
+
+### 12.2 Solution Design
+
+Use Python's `contextvars` module to generate and store a unique request ID (UUID4) for each HTTP request, then propagate it through the async context and include it in every log line.
+
+### 12.3 Implementation Tasks
+
+- [ ] **12.3.1 Add contextvars to logging.py**: Import `contextvars`, create a `ContextVar("request_id")` that stores the current request ID (default `None`); create a `get_request_id()` function that returns the current value
+
+- [ ] **12.3.2 Modify RequestLoggingMiddleware**: Generate a unique request ID using `uuid.uuid4().hex[:12]` (12-char short form) on each HTTP request; set it in the context variable at the start of request processing; include it in the initial request log; ensure it persists through the async context
+
+- [ ] **12.3.3 Update logging format**: Change `basicConfig` format string from `"%(asctime)s %(levelname)s %(name)s %(message)s"` to include request ID field: `"%(asctime)s [%(request_id)s] %(levelname)s %(name)s:%(funcName)s - %(message)s"` (or similar readable format)
+
+- [ ] **12.3.4 Implement LogRecord filter**: Create a custom `logging.Filter` subclass that injects the current request ID into every LogRecord via `record.request_id = get_request_id() or "none"`; register this filter on the root logger in `setup_logging()`
+
+- [ ] **12.3.5 Update @log_call decorator**: Ensure the decorator logs correctly with the new format (no changes needed if the filter is working); verify in tests that request ID appears in log output
+
+- [ ] **12.3.6 Test request traceability**: Write a test that:
+  - Simulates an HTTP request to a route that triggers `backup_runner.run_backup()`
+  - Captures all log output
+  - Verifies that every log line (from RequestLoggingMiddleware, backup_runner, restic, notifications) contains the **same request ID**
+  - Example assertion: `assert all(request_id in line for line in log_lines)`
+
+- [ ] **12.3.7 Document logging format**: Update CLAUDE.md section 2.1 to describe the new request ID traceability feature; include example log output showing a complete request flow with consistent request ID
+
+- [ ] **12.3.8 Verify existing tests still pass**: Run full test suite (`pytest`) to ensure LogRecord filter doesn't break any existing tests or log assertions
+
+### 12.4 Expected Logging Output
+
+After implementation, a complete backup request flow should produce logs like:
+
+```
+2026-05-17 10:23:45.123 [abc1234567f8] INFO app.api.routes.jobs:post_run - POST /api/jobs/job-456/run → 202
+2026-05-17 10:23:45.125 [abc1234567f8] INFO app.services.backup_runner:run_backup - step=acquire_lock job_id=job-456
+2026-05-17 10:23:45.126 [abc1234567f8] INFO app.services.backup_runner:run_backup - step=create_run run_id=run-789
+2026-05-17 10:23:46.234 [abc1234567f8] DEBUG app.services.restic:restic_cat_config - restic_cat_config called args=(...)
+2026-05-17 10:23:46.245 [abc1234567f8] DEBUG app.services.restic:restic_cat_config - restic_cat_config returned (0, '...', '')
+2026-05-17 10:23:47.456 [abc1234567f8] INFO app.services.backup_runner:run_backup - step=backup source=/sources/documents
+2026-05-17 10:23:52.789 [abc1234567f8] INFO app.services.notifications:send_notification - sending notification to https://ntfy.sh/documents-backups
+```
+
+All logs carry `abc1234567f8`, making the entire transaction traceable with: `grep "abc1234567f8" app.log`
+
+### 12.5 Non-functional Requirements
+
+- Request ID must be **12 characters** (UUID4 hex substring) to keep logs compact
+- Request ID must be **immutable** once set for a given request — never change or regenerate
+- Context variable must be **cleaned up** or isolated between concurrent requests (asyncio + contextvars handles this automatically)
+- Format string must be **backward compatible** — adding request ID doesn't break parsing or tooling
+- Logging level and existing log messages must **not change** — only format changes
 
 ---
 
