@@ -31,9 +31,9 @@ Central planning document. Tick items as they are completed. Break nothing up fu
 
 ### 1.3 Migrations
 
-- [ ] Create initial Alembic migration (`alembic revision --autogenerate -m "initial schema"`)
-- [ ] Verify generated migration covers all four tables and all columns
-- [ ] Run `alembic upgrade head` inside container and confirm no errors
+- [x] Create initial Alembic migration (`alembic revision --autogenerate -m "initial schema"`)
+- [x] Verify generated migration covers all four tables and all columns
+- [x] Run `alembic upgrade head` inside container and confirm no errors
 
 ---
 
@@ -498,23 +498,23 @@ Implements the 12-step lifecycle. Uses `LoggerAdapter` with `job_id` + `run_id` 
 
 ## Summary
 
-| Area | Done | Remaining |
-|------|------|-----------|
-| DB models & engine | 6/6 | 0 |
-| Alembic migration | 0/3 | 3 |
-| Core (logging, scheduler, config) | 10/10 | 0 |
-| API schemas | 12/12 | 0 |
-| API routes | 18/18 | 0 |
-| Main.py wiring | 7/7 | 0 |
-| `restic.py` functions | 0/9 | 9 |
-| `backup_runner.py` steps | 0/21 | 21 |
-| Backend route-layer tests | 157/157 | 0 |
-| Backend service-layer tests | 0/73 | 73 (will pass once services done) |
-| Frontend shadcn/ui setup | 0/4 | 4 |
-| Frontend components | 0/30 | 30 |
-| Frontend pages | 0/47 | 47 |
-| Frontend tests | 0/9 files | 9 test files |
-| Dockerfile | 0/6 | 6 |
-| docker-compose production | 0/5 | 5 |
-| E2E smoke test | 0/5 | 5 |
-| Polish & docs | 0/7 | 7 |
+| Area                              | Done      | Remaining                         |
+| --------------------------------- | --------- | --------------------------------- |
+| DB models & engine                | 6/6       | 0                                 |
+| Alembic migration                 | 3/3       | 0                                 |
+| Core (logging, scheduler, config) | 10/10     | 0                                 |
+| API schemas                       | 12/12     | 0                                 |
+| API routes                        | 18/18     | 0                                 |
+| Main.py wiring                    | 7/7       | 0                                 |
+| `restic.py` functions             | 0/9       | 9                                 |
+| `backup_runner.py` steps          | 0/21      | 21                                |
+| Backend route-layer tests         | 157/157   | 0                                 |
+| Backend service-layer tests       | 0/73      | 73 (will pass once services done) |
+| Frontend shadcn/ui setup          | 0/4       | 4                                 |
+| Frontend components               | 0/30      | 30                                |
+| Frontend pages                    | 0/47      | 47                                |
+| Frontend tests                    | 0/9 files | 9 test files                      |
+| Dockerfile                        | 0/6       | 6                                 |
+| docker-compose production         | 0/5       | 5                                 |
+| E2E smoke test                    | 0/5       | 5                                 |
+| Polish & docs                     | 0/7       | 7                                 |
