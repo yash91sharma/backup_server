@@ -160,97 +160,97 @@ Implements the 12-step lifecycle. Uses `LoggerAdapter` with `job_id` + `run_id` 
 
 **Pre-step — Invocation and job lookup**
 
-- [ ] At module level, import `engine` from `app.db.database` so tests can patch it
-- [ ] `run_backup(job_id, run_id=None)`: fetch `BackupJob` by `job_id`; if not found, return silently (no-op — tests verify `job_id not in _active_jobs`)
-- [ ] Two invocation paths based on whether `run_id` is provided:
+- [x] At module level, import `engine` from `app.db.database` so tests can patch it
+- [x] `run_backup(job_id, run_id=None)`: fetch `BackupJob` by `job_id`; if not found, return silently (no-op — tests verify `job_id not in _active_jobs`)
+- [x] Two invocation paths based on whether `run_id` is provided:
   - **Scheduler path** (`run_id=None`): must do the full concurrent run guard (steps below) and create the `BackupRun` row itself
   - **API path** (`run_id` provided): the route already created the row and checked `_active_jobs`; add `job_id` to `_active_jobs` and proceed directly to step 2
 
 **Step 1 — Concurrent run guard** (scheduler path only, when `run_id=None`)
 
-- [ ] Initialise `_job_locks[job_id]` on first access via `_job_locks.setdefault(job_id, asyncio.Lock())`
-- [ ] Acquire the lock; within the lock, query for an existing `status=running` row for this job
-- [ ] If running row found: create `status=skipped`, `reason=overlapping_run`, `started_at=now`, `finished_at=now`, `prune_status=skipped`, `check_status=skipped`; release lock; return
-- [ ] If no running row: create a new `BackupRun(status=running, triggered_by=scheduler, started_at=now)` row; commit; add `job_id` to `_active_jobs`; release lock; proceed with this new run row
+- [x] Initialise `_job_locks[job_id]` on first access via `_job_locks.setdefault(job_id, asyncio.Lock())`
+- [x] Acquire the lock; within the lock, query for an existing `status=running` row for this job
+- [x] If running row found: create `status=skipped`, `reason=overlapping_run`, `started_at=now`, `finished_at=now`, `prune_status=skipped`, `check_status=skipped`; release lock; return
+- [x] If no running row: create a new `BackupRun(status=running, triggered_by=scheduler, started_at=now)` row; commit; add `job_id` to `_active_jobs`; release lock; proceed with this new run row
 
 **Step 2 — Validate password**
 
-- [ ] If `restic_password` is null/empty: update run to `status=failed`, `error_output="No restic password configured for this job."`, `finished_at=now`, `prune_status=skipped`, `check_status=skipped`; skip to cleanup (finally block)
+- [x] If `restic_password` is null/empty: update run to `status=failed`, `error_output="No restic password configured for this job."`, `finished_at=now`, `prune_status=skipped`, `check_status=skipped`; skip to cleanup (finally block)
 
 **Step 3 — Start notification**
 
-- [ ] Fetch `AppSettings(id=1)` to get ntfy config (reused for all notification steps)
-- [ ] If `settings.notify_on_start` and topic is set: fire-and-forget `send_notification` with job name, source, destination, triggered-by
+- [x] Fetch `AppSettings(id=1)` to get ntfy config (reused for all notification steps)
+- [x] If `settings.notify_on_start` and topic is set: fire-and-forget `send_notification` with job name, source, destination, triggered-by
 
 **Step 4 — Init check**
 
-- [ ] Build `repo_path = f"/destinations/{job.destination_label}/{job.id}"`
-- [ ] Call `restic_cat_config(repo_path, password)`
-- [ ] If rc != 0 **and** `"wrong password"` appears in stderr: update run to `status=failed`, `error_output=stderr`, `prune_status=skipped`, `check_status=skipped`; skip to steps 10/11 — do NOT attempt init
-- [ ] If rc != 0 **and** wrong-password not in stderr (repo absent or other error): call `restic_init(repo_path, password)`
-- [ ] If init also fails (rc != 0): update run to `status=failed`, `error_output=stderr`, `prune_status=skipped`, `check_status=skipped`; skip to steps 10/11
+- [x] Build `repo_path = f"/destinations/{job.destination_label}/{job.id}"`
+- [x] Call `restic_cat_config(repo_path, password)`
+- [x] If rc != 0 **and** `"wrong password"` appears in stderr: update run to `status=failed`, `error_output=stderr`, `prune_status=skipped`, `check_status=skipped`; skip to steps 10/11 — do NOT attempt init
+- [x] If rc != 0 **and** wrong-password not in stderr (repo absent or other error): call `restic_init(repo_path, password)`
+- [x] If init also fails (rc != 0): update run to `status=failed`, `error_output=stderr`, `prune_status=skipped`, `check_status=skipped`; skip to steps 10/11
 
 **Step 5 — Backup**
 
-- [ ] Build `source_path = f"/sources/{job.source_label}"` (append `/{job.source_subpath}` if set)
-- [ ] Compute timeout: `(job.timeout_hours or settings.default_job_timeout_hours) * 3600`
-- [ ] Collect kwargs from all non-null backup-behaviour fields on the job
-- [ ] Call `restic_backup(repo_path, password, source_path, timeout_seconds, **kwargs)`
-- [ ] On timeout: `status=failed`, `error_output="Backup subprocess timed out after N hours"`, `prune_status=skipped`, `check_status=skipped`; go to step 10/11
-- [ ] On rc != 0: `status=failed`, `error_output=stderr`, `prune_status=skipped`, `check_status=skipped`; go to step 10/11
+- [x] Build `source_path = f"/sources/{job.source_label}"` (append `/{job.source_subpath}` if set)
+- [x] Compute timeout: `(job.timeout_hours or settings.default_job_timeout_hours) * 3600`
+- [x] Collect kwargs from all non-null backup-behaviour fields on the job
+- [x] Call `restic_backup(repo_path, password, source_path, timeout_seconds, **kwargs)`
+- [x] On timeout: `status=failed`, `error_output="Backup subprocess timed out after N hours"`, `prune_status=skipped`, `check_status=skipped`; go to step 10/11
+- [x] On rc != 0: `status=failed`, `error_output=stderr`, `prune_status=skipped`, `check_status=skipped`; go to step 10/11
 
 **Step 6 — Parse output**
 
-- [ ] Extract final JSON summary dict from stdout (last line matching `{`)
-- [ ] If no summary dict found: treat as failure
+- [x] Extract final JSON summary dict from stdout (last line matching `{`)
+- [x] If no summary dict found: treat as failure
 
 **Step 7 — Update run stats**
 
-- [ ] Populate `files_new`, `files_changed`, `files_unmodified` from summary
-- [ ] Populate `dirs_new`, `dirs_changed`, `dirs_unmodified` from summary
-- [ ] Populate `data_added_bytes` (`data_added`), `data_added_packed_bytes` (`data_added_packed`), `total_bytes_processed`
-- [ ] Populate `snapshot_id` from summary `snapshot_id` field
-- [ ] Store full stdout in `backup_output`
+- [x] Populate `files_new`, `files_changed`, `files_unmodified` from summary
+- [x] Populate `dirs_new`, `dirs_changed`, `dirs_unmodified` from summary
+- [x] Populate `data_added_bytes` (`data_added`), `data_added_packed_bytes` (`data_added_packed`), `total_bytes_processed`
+- [x] Populate `snapshot_id` from summary `snapshot_id` field
+- [x] Store full stdout in `backup_output`
 
 **Step 8 — Prune**
 
-- [ ] Collect non-null retention fields from job
-- [ ] If any retention field set: call `restic_forget_prune(repo_path, password, timeout, **retention)`; else call `restic_prune(repo_path, password, timeout)`
-- [ ] If rc == 0: `prune_status=passed`
-- [ ] If rc != 0: `prune_status=failed`, `prune_error_output=stderr`; **non-fatal** — continue to step 9
+- [x] Collect non-null retention fields from job
+- [x] If any retention field set: call `restic_forget_prune(repo_path, password, timeout, **retention)`; else call `restic_prune(repo_path, password, timeout)`
+- [x] If rc == 0: `prune_status=passed`
+- [x] If rc != 0: `prune_status=failed`, `prune_error_output=stderr`; **non-fatal** — continue to step 9
 
 **Step 9 — Reconcile snapshots**
 
-- [ ] Call `restic_snapshots(repo_path, password)`
-- [ ] Delete `Snapshot` rows for this job whose `snapshot_id` is not in the returned list (pruned)
-- [ ] Upsert a `Snapshot` row for each entry returned: `snapshot_id`, `snapshot_time`, `hostname`, `paths`, `tags`, `size_bytes` from `summary.total_size`
-- [ ] Set `run_id` on the row matching the current run's `snapshot_id`
-- [ ] Set `captured_at = run.finished_at`
+- [x] Call `restic_snapshots(repo_path, password)`
+- [x] Delete `Snapshot` rows for this job whose `snapshot_id` is not in the returned list (pruned)
+- [x] Upsert a `Snapshot` row for each entry returned: `snapshot_id`, `snapshot_time`, `hostname`, `paths`, `tags`, `size_bytes` from `summary.total_size`
+- [x] Set `run_id` on the row matching the current run's `snapshot_id`
+- [x] Set `captured_at = run.finished_at`
 
 **Step 10 — Finalise run**
 
-- [ ] Set `status=success` (or `failed` if any earlier step failed)
-- [ ] Set `finished_at = now`, `duration_seconds = (finished_at - started_at).seconds`
-- [ ] If `check_status` is still `null` — regardless of whether backup succeeded or failed, and regardless of `check_enabled` — set `check_status=skipped`; this covers: failed runs, runs where `check_enabled=false`, and any other path that didn't reach step 12
+- [x] Set `status=success` (or `failed` if any earlier step failed)
+- [x] Set `finished_at = now`, `duration_seconds = (finished_at - started_at).seconds`
+- [x] If `check_status` is still `null` — regardless of whether backup succeeded or failed, and regardless of `check_enabled` — set `check_status=skipped`; this covers: failed runs, runs where `check_enabled=false`, and any other path that didn't reach step 12
 
 **Step 11 — Completion notification**
 
-- [ ] If `status=success` and `settings.notify_on_success`: fire-and-forget `send_notification` with duration, files changed, data added
-- [ ] If `status=failed` and `settings.notify_on_failure`: fire-and-forget with excerpt from `error_output`
+- [x] If `status=success` and `settings.notify_on_success`: fire-and-forget `send_notification` with duration, files changed, data added
+- [x] If `status=failed` and `settings.notify_on_failure`: fire-and-forget with excerpt from `error_output`
 
 **Step 12 — Integrity check** (only if `check_enabled=True` and `status=success`)
 
-- [ ] If `settings.notify_on_verification`: send "verification started" notification
-- [ ] Compute check timeout: `(job.check_timeout_hours or settings.default_job_timeout_hours) * 3600`
-- [ ] Call `restic_check(repo_path, password, job.check_mode, job.check_subset_percent, timeout_seconds)`
-- [ ] On timeout: `check_status=failed`, `check_error_output="Verification subprocess timed out after N hours"`; run `status` stays `success`
-- [ ] On rc == 0: `check_status=passed`
-- [ ] On rc != 0: `check_status=failed`, `check_error_output=stderr`; **non-fatal**
-- [ ] If `settings.notify_on_verification`: send "verification complete" notification with passed/failed
+- [x] If `settings.notify_on_verification`: send "verification started" notification
+- [x] Compute check timeout: `(job.check_timeout_hours or settings.default_job_timeout_hours) * 3600`
+- [x] Call `restic_check(repo_path, password, job.check_mode, job.check_subset_percent, timeout_seconds)`
+- [x] On timeout: `check_status=failed`, `check_error_output="Verification subprocess timed out after N hours"`; run `status` stays `success`
+- [x] On rc == 0: `check_status=passed`
+- [x] On rc != 0: `check_status=failed`, `check_error_output=stderr`; **non-fatal**
+- [x] If `settings.notify_on_verification`: send "verification complete" notification with passed/failed
 
 **Cleanup**
 
-- [ ] Remove `job_id` from `_active_jobs` in a `finally` block (always runs, even on unhandled exception)
+- [x] Remove `job_id` from `_active_jobs` in a `finally` block (always runs, even on unhandled exception)
 
 ### 4.3 Notifications (`app/services/notifications.py`)
 
@@ -270,8 +270,8 @@ Implements the 12-step lifecycle. Uses `LoggerAdapter` with `job_id` + `run_id` 
 
 ### 5.2 Tests that will pass once service layer is implemented
 
-- [ ] `test_restic.py` — 42 tests covering: version parse, cat config, init, backup flags/timeout/password masking, snapshots, forget-prune retention flags, prune, check modes, unlock
-- [ ] `test_backup_runner.py` — 31 tests covering: all 12 steps, overlapping run guard, password validation, active-job cleanup, notification flags, source/repo path construction, stats population, check timeout and modes
+- [x] `test_restic.py` — 42 tests covering: version parse, cat config, init, backup flags/timeout/password masking, snapshots, forget-prune retention flags, prune, check modes, unlock
+- [x] `test_backup_runner.py` — 31 tests covering: all 12 steps, overlapping run guard, password validation, active-job cleanup, notification flags, source/repo path construction, stats population, check timeout and modes
 
 ---
 
@@ -566,10 +566,11 @@ All logs carry `abc1234567f8`, making the entire transaction traceable with: `gr
 | API schemas                       | 12/12     | 0                                 |
 | API routes                        | 18/18     | 0                                 |
 | Main.py wiring                    | 7/7       | 0                                 |
-| `restic.py` functions             | 0/9       | 9                                 |
-| `backup_runner.py` steps          | 0/21      | 21                                |
+| `restic.py` functions             | 9/9       | 0                                 |
+| `backup_runner.py` steps          | 21/21     | 0                                 |
 | Backend route-layer tests         | 157/157   | 0                                 |
-| Backend service-layer tests       | 0/73      | 73 (will pass once services done) |
+| Backend service-layer tests       | 73/73     | 0                                 |
+| **Backend Total**                 | **230/230** | **0** ✅                         |
 | Frontend shadcn/ui setup          | 0/4       | 4                                 |
 | Frontend components               | 0/30      | 30                                |
 | Frontend pages                    | 0/47      | 47                                |
