@@ -1,7 +1,7 @@
 import asyncio
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional, Set
+from typing import Any, Dict, Optional, Set, cast
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -35,7 +35,7 @@ async def run_backup(job_id: uuid.UUID, run_id: Optional[uuid.UUID] = None) -> N
 
     # Pre-step: Job lookup
     async with factory() as s:
-        job = await s.get(BackupJob, str(job_id))
+        job: BackupJob | None = await s.get(BackupJob, str(job_id))
 
     if not job:
         logger.warning(f"job_id={job_id} not found in database")
@@ -44,11 +44,12 @@ async def run_backup(job_id: uuid.UUID, run_id: Optional[uuid.UUID] = None) -> N
     logger.info(f"job_id={job_id} run_id={run_id} backup_started")
 
     # Two invocation paths: scheduler (no run_id) or API (run_id provided)
+    current_run_id: uuid.UUID | None = None
     try:
         if run_id is None:
             # Scheduler path: do concurrent run guard and create run row
             logger.debug(f"job_id={job_id} step=concurrent_guard acquiring lock")
-            lock = _job_locks.setdefault(job_id, asyncio.Lock())
+            lock: asyncio.Lock = _job_locks.setdefault(job_id, asyncio.Lock())
             async with lock:
                 async with factory() as s:
                     result = await s.execute(
@@ -57,16 +58,17 @@ async def run_backup(job_id: uuid.UUID, run_id: Optional[uuid.UUID] = None) -> N
                             BackupRun.status == RunStatus.running,
                         )
                     )
-                    running_run = result.scalars().first()
+                    running_run: BackupRun | None = result.scalars().first()
 
                 if running_run:
+                    current_run_id = uuid.UUID(str(uuid.uuid4()))
                     logger.info(
                         f"job_id={job_id} step=concurrent_guard "
                         f"reason=overlapping_run skipping"
                     )
                     async with factory() as s:
-                        run = BackupRun(
-                            id=str(uuid.uuid4()),
+                        skipped_run: BackupRun = BackupRun(
+                            id=str(current_run_id),
                             job_id=str(job_id),
                             status=RunStatus.skipped,
                             reason="overlapping_run",
@@ -76,136 +78,169 @@ async def run_backup(job_id: uuid.UUID, run_id: Optional[uuid.UUID] = None) -> N
                             prune_status=PruneStatus.skipped,
                             check_status=CheckStatus.skipped,
                         )
-                        s.add(run)
+                        s.add(skipped_run)
                         await s.commit()
                     return
 
                 # Create running row
-                now = datetime.now(timezone.utc)
+                started_now: datetime = datetime.now(timezone.utc)
                 async with factory() as s:
-                    run = BackupRun(
+                    new_run: BackupRun = BackupRun(
                         id=str(uuid.uuid4()),
                         job_id=str(job_id),
                         status=RunStatus.running,
-                        started_at=now,
+                        started_at=started_now,
                         triggered_by=TriggeredBy.scheduler,
                     )
-                    s.add(run)
+                    s.add(new_run)
                     await s.commit()
-                    run_id = uuid.UUID(run.id)
+                    current_run_id = uuid.UUID(cast(str, new_run.id))
                 logger.debug(
-                    f"job_id={job_id} run_id={run_id} step=concurrent_guard "
+                    f"job_id={job_id} run_id={current_run_id} step=concurrent_guard "
                     f"run_row_created"
                 )
+        else:
+            # API path: run_id was provided
+            current_run_id = run_id  # type: ignore[assignment]
 
         _active_jobs.add(job_id)
-        logger.debug(f"job_id={job_id} run_id={run_id} added to active_jobs")
+        logger.debug(f"job_id={job_id} run_id={current_run_id} added to active_jobs")
 
         # Step 2: Validate password
-        logger.debug(f"job_id={job_id} run_id={run_id} step=validate_password")
-        if not job.restic_password:
+        logger.debug(f"job_id={job_id} run_id={current_run_id} step=validate_password")
+        job_password: str | None = cast(str | None, job.restic_password)
+        if not job_password:
             logger.error(
-                f"job_id={job_id} run_id={run_id} step=validate_password "
+                f"job_id={job_id} run_id={current_run_id} step=validate_password "
                 f"error=no_password_configured"
             )
             async with factory() as s:
-                run = await s.get(BackupRun, str(run_id))
-                run.status = RunStatus.failed
-                run.error_output = "No restic password configured for this job."
-                run.finished_at = datetime.now(timezone.utc)
-                run.duration_seconds = 0
-                run.prune_status = PruneStatus.skipped
-                run.check_status = CheckStatus.skipped
-                await s.commit()
+                failed_run: BackupRun | None = await s.get(
+                    BackupRun, str(current_run_id)
+                )
+                if failed_run:
+                    now_utc: datetime = datetime.now(timezone.utc)
+                    failed_run.status = RunStatus.failed  # type: ignore[assignment]
+                    failed_run.error_output = (  # type: ignore[assignment]
+                        "No restic password configured for this job."
+                    )
+                    failed_run.finished_at = now_utc  # type: ignore[assignment]
+                    failed_run.duration_seconds = 0  # type: ignore[assignment]
+                    failed_run.prune_status = PruneStatus.skipped  # type: ignore[assignment]
+                    failed_run.check_status = CheckStatus.skipped  # type: ignore[assignment]
+                    await s.commit()
             return
 
         # Load settings once for use throughout
         settings_dict: Dict[str, Any] = {}
         async with factory() as s:
-            settings_obj = await s.get(AppSettings, 1)
+            settings_obj: AppSettings | None = await s.get(AppSettings, 1)
             if settings_obj:
                 settings_dict = {
-                    "ntfy_server_url": settings_obj.ntfy_server_url,
-                    "ntfy_topic": settings_obj.ntfy_topic,
-                    "ntfy_token": settings_obj.ntfy_token,
-                    "notify_on_start": settings_obj.notify_on_start,
-                    "notify_on_success": settings_obj.notify_on_success,
-                    "notify_on_failure": settings_obj.notify_on_failure,
-                    "notify_on_verification": settings_obj.notify_on_verification,
-                    "default_job_timeout_hours": settings_obj.default_job_timeout_hours,
+                    "ntfy_server_url": cast(str | None, settings_obj.ntfy_server_url),
+                    "ntfy_topic": cast(str | None, settings_obj.ntfy_topic),
+                    "ntfy_token": cast(str | None, settings_obj.ntfy_token),
+                    "notify_on_start": cast(bool, settings_obj.notify_on_start),
+                    "notify_on_success": cast(bool, settings_obj.notify_on_success),
+                    "notify_on_failure": cast(bool, settings_obj.notify_on_failure),
+                    "notify_on_verification": cast(
+                        bool, settings_obj.notify_on_verification
+                    ),
+                    "default_job_timeout_hours": cast(
+                        int, settings_obj.default_job_timeout_hours
+                    ),
                 }
 
         # Step 3: Start notification
-        if settings_dict.get("notify_on_start") and settings_dict.get("ntfy_topic"):
+        ntfy_topic: str | None = cast(str | None, settings_dict.get("ntfy_topic"))
+        if settings_dict.get("notify_on_start") and ntfy_topic:
             logger.info(f"step=start_notification job_id={job_id}")
+            src: str = cast(str, job.source_label)
+            dst: str = cast(str, job.destination_label)
             await send_notification(
-                settings_dict.get("ntfy_server_url"),
-                settings_dict.get("ntfy_topic"),
+                cast(str | None, settings_dict.get("ntfy_server_url")),
+                ntfy_topic,
                 f"Starting backup: {job.name}",
-                f"Source: {job.source_label}, Destination: {job.destination_label}",
-                token=settings_dict.get("ntfy_token"),
+                f"Source: {src}, Destination: {dst}",
+                token=cast(str | None, settings_dict.get("ntfy_token")),
             )
 
         # Build repo and source paths
-        repo_path = f"/destinations/{job.destination_label}/{str(job_id)}"
-        source_path = f"/sources/{job.source_label}"
-        if job.source_subpath:
-            source_path = f"{source_path}/{job.source_subpath}"
+        job_dest_label: str = cast(str, job.destination_label)
+        job_source_label: str = cast(str, job.source_label)
+        job_source_subpath: str | None = cast(str | None, job.source_subpath)
+        repo_path: str = f"/destinations/{job_dest_label}/{str(job_id)}"
+        source_path: str = f"/sources/{job_source_label}"
+        if job_source_subpath:
+            source_path = f"{source_path}/{job_source_subpath}"
 
         # Step 4: Init check
         logger.debug(
-            f"job_id={job_id} run_id={run_id} step=init_check repo_path={repo_path}"
+            f"job_id={job_id} run_id={current_run_id} step=init_check "
+            f"repo_path={repo_path}"
         )
-        rc, _, stderr = await restic.restic_cat_config(repo_path, job.restic_password)
+        rc: int
+        stderr: str
+        rc, _, stderr = await restic.restic_cat_config(repo_path, job_password)
         if rc != 0:
             if "wrong password" in stderr.lower():
                 logger.error(
-                    f"job_id={job_id} run_id={run_id} step=init_check "
+                    f"job_id={job_id} run_id={current_run_id} step=init_check "
                     f"error=wrong_password"
                 )
                 async with factory() as s:
-                    run = await s.get(BackupRun, str(run_id))
-                    run.status = RunStatus.failed
-                    run.error_output = stderr
-                    run.finished_at = datetime.now(timezone.utc)
-                    run.duration_seconds = 0
-                    run.prune_status = PruneStatus.skipped
-                    run.check_status = CheckStatus.skipped
-                    await s.commit()
+                    wrong_pwd_run: BackupRun | None = await s.get(
+                        BackupRun, str(current_run_id)
+                    )
+                    if wrong_pwd_run:
+                        now_utc: datetime = datetime.now(timezone.utc)
+                        wrong_pwd_run.status = RunStatus.failed  # type: ignore[assignment]
+                        wrong_pwd_run.error_output = stderr  # type: ignore[assignment]
+                        wrong_pwd_run.finished_at = now_utc  # type: ignore[assignment]
+                        wrong_pwd_run.duration_seconds = 0  # type: ignore[assignment]
+                        wrong_pwd_run.prune_status = PruneStatus.skipped  # type: ignore[assignment]
+                        wrong_pwd_run.check_status = CheckStatus.skipped  # type: ignore[assignment]
+                        await s.commit()
                 return
 
             # Try to init
             logger.info(
-                f"job_id={job_id} run_id={run_id} step=init_check "
+                f"job_id={job_id} run_id={current_run_id} step=init_check "
                 f"repo_not_found initializing"
             )
-            rc, _, init_stderr = await restic.restic_init(
-                repo_path, job.restic_password
-            )
+            rc, _, init_stderr = await restic.restic_init(repo_path, job_password)
             if rc != 0:
                 logger.error(
-                    f"job_id={job_id} run_id={run_id} step=init_check error=init_failed"
+                    f"job_id={job_id} run_id={current_run_id} step=init_check "
+                    f"error=init_failed"
                 )
                 async with factory() as s:
-                    run = await s.get(BackupRun, str(run_id))
-                    run.status = RunStatus.failed
-                    run.error_output = init_stderr
-                    run.finished_at = datetime.now(timezone.utc)
-                    run.duration_seconds = 0
-                    run.prune_status = PruneStatus.skipped
-                    run.check_status = CheckStatus.skipped
-                    await s.commit()
+                    init_fail_run: BackupRun | None = await s.get(
+                        BackupRun, str(current_run_id)
+                    )
+                    if init_fail_run:
+                        now_utc: datetime = datetime.now(timezone.utc)
+                        init_fail_run.status = RunStatus.failed  # type: ignore[assignment]
+                        init_fail_run.error_output = init_stderr  # type: ignore[assignment]
+                        init_fail_run.finished_at = now_utc  # type: ignore[assignment]
+                        init_fail_run.duration_seconds = 0  # type: ignore[assignment]
+                        init_fail_run.prune_status = PruneStatus.skipped  # type: ignore[assignment]
+                        init_fail_run.check_status = CheckStatus.skipped  # type: ignore[assignment]
+                        await s.commit()
                 return
             logger.info(
-                f"job_id={job_id} run_id={run_id} step=init_check repo_initialized"
+                f"job_id={job_id} run_id={current_run_id} step=init_check "
+                f"repo_initialized"
             )
 
         # Step 5: Backup
-        timeout_seconds = (
-            job.timeout_hours or settings_dict.get("default_job_timeout_hours", 24)
-        ) * 3600
+        job_timeout_hours: int | None = cast(int | None, job.timeout_hours)
+        default_timeout: int = cast(
+            int, settings_dict.get("default_job_timeout_hours", 24)
+        )
+        timeout_seconds: int = (job_timeout_hours or default_timeout) * 3600
         logger.info(
-            f"job_id={job_id} run_id={run_id} step=backup_execution "
+            f"job_id={job_id} run_id={current_run_id} step=backup_execution "
             f"source_path={source_path} timeout_seconds={timeout_seconds}"
         )
         backup_kwargs: Dict[str, Any] = {
@@ -231,7 +266,7 @@ async def run_backup(job_id: uuid.UUID, run_id: Optional[uuid.UUID] = None) -> N
         try:
             rc, stdout, stderr, summary = await restic.restic_backup(
                 repo_path,
-                job.restic_password,
+                job_password,
                 source_path,
                 timeout_seconds,
                 **backup_kwargs,
@@ -239,53 +274,74 @@ async def run_backup(job_id: uuid.UUID, run_id: Optional[uuid.UUID] = None) -> N
             if rc == 0:
                 backup_success = True
                 logger.info(
-                    f"job_id={job_id} run_id={run_id} step=backup_execution "
+                    f"job_id={job_id} run_id={current_run_id} step=backup_execution "
                     f"status=success"
                 )
             else:
                 logger.error(
-                    f"job_id={job_id} run_id={run_id} step=backup_execution "
+                    f"job_id={job_id} run_id={current_run_id} step=backup_execution "
                     f"status=failed rc={rc}"
                 )
                 async with factory() as s:
-                    run = await s.get(BackupRun, str(run_id))
-                    run.status = RunStatus.failed
-                    run.error_output = stderr
-                    await s.commit()
+                    backup_fail_run: BackupRun | None = await s.get(
+                        BackupRun, str(current_run_id)
+                    )
+                    if backup_fail_run:
+                        backup_fail_run.status = RunStatus.failed  # type: ignore[assignment]
+                        backup_fail_run.error_output = stderr  # type: ignore[assignment]
+                        await s.commit()
         except asyncio.TimeoutError:
-            hours = job.timeout_hours or settings_dict.get(
-                "default_job_timeout_hours", 24
-            )
+            hours: int = job_timeout_hours or default_timeout
             logger.error(
-                f"job_id={job_id} run_id={run_id} step=backup_execution "
+                f"job_id={job_id} run_id={current_run_id} step=backup_execution "
                 f"error=timeout timeout_hours={hours}"
             )
             async with factory() as s:
-                run = await s.get(BackupRun, str(run_id))
-                run.status = RunStatus.failed
-                run.error_output = f"Backup timed out after {hours} hours"
-                await s.commit()
+                timeout_run: BackupRun | None = await s.get(
+                    BackupRun, str(current_run_id)
+                )
+                if timeout_run:
+                    timeout_error_msg: str = f"Backup timed out after {hours} hours"
+                    timeout_run.status = RunStatus.failed  # type: ignore[assignment]
+                    timeout_run.error_output = timeout_error_msg  # type: ignore[assignment]
+                    await s.commit()
 
         # Step 6 & 7: Parse output and update stats (only if backup succeeded)
         if backup_success:
             async with factory() as s:
-                run = await s.get(BackupRun, str(run_id))
-                if summary:
-                    run.files_new = summary.get("files_new")
-                    run.files_changed = summary.get("files_changed")
-                    run.files_unmodified = summary.get("files_unmodified")
-                    run.dirs_new = summary.get("dirs_new")
-                    run.dirs_changed = summary.get("dirs_changed")
-                    run.dirs_unmodified = summary.get("dirs_unmodified")
-                    run.data_added_bytes = summary.get("data_added")
-                    run.data_added_packed_bytes = summary.get("data_added_packed")
-                    run.total_bytes_processed = summary.get("total_bytes_processed")
-                    run.snapshot_id = summary.get("snapshot_id")
-                run.backup_output = stdout
-                await s.commit()
+                stats_run: BackupRun | None = await s.get(
+                    BackupRun, str(current_run_id)
+                )
+                if stats_run:
+                    if summary:
+                        files_new: int | None = summary.get("files_new")
+                        files_changed: int | None = summary.get("files_changed")
+                        files_unmodified: int | None = summary.get("files_unmodified")
+                        dirs_new: int | None = summary.get("dirs_new")
+                        dirs_changed: int | None = summary.get("dirs_changed")
+                        dirs_unmodified: int | None = summary.get("dirs_unmodified")
+                        data_added: int | None = summary.get("data_added")
+                        data_added_packed: int | None = summary.get("data_added_packed")
+                        total_bytes_proc: int | None = summary.get(
+                            "total_bytes_processed"
+                        )
+                        snap_id: str | None = summary.get("snapshot_id")
+
+                        stats_run.files_new = files_new  # type: ignore[assignment]
+                        stats_run.files_changed = files_changed  # type: ignore[assignment]
+                        stats_run.files_unmodified = files_unmodified  # type: ignore[assignment]
+                        stats_run.dirs_new = dirs_new  # type: ignore[assignment]
+                        stats_run.dirs_changed = dirs_changed  # type: ignore[assignment]
+                        stats_run.dirs_unmodified = dirs_unmodified  # type: ignore[assignment]
+                        stats_run.data_added_bytes = data_added  # type: ignore[assignment]
+                        stats_run.data_added_packed_bytes = data_added_packed  # type: ignore[assignment]
+                        stats_run.total_bytes_processed = total_bytes_proc  # type: ignore[assignment]
+                        stats_run.snapshot_id = snap_id  # type: ignore[assignment]
+                    stats_run.backup_output = stdout  # type: ignore[assignment]
+                    await s.commit()
 
             # Step 8: Prune (only if backup succeeded)
-            logger.debug(f"job_id={job_id} run_id={run_id} step=prune")
+            logger.debug(f"job_id={job_id} run_id={current_run_id} step=prune")
             retention_kwargs: Dict[str, Any] = {
                 k: getattr(job, k)
                 for k in [
@@ -305,52 +361,56 @@ async def run_backup(job_id: uuid.UUID, run_id: Optional[uuid.UUID] = None) -> N
                 if getattr(job, k) is not None
             }
 
+            prune_err: str = ""
             if retention_kwargs:
                 logger.info(
-                    f"job_id={job_id} run_id={run_id} step=prune mode=forget_prune"
+                    f"job_id={job_id} run_id={current_run_id} step=prune "
+                    f"mode=forget_prune"
                 )
                 rc, _, prune_err = await restic.restic_forget_prune(
                     repo_path,
-                    job.restic_password,
+                    job_password,
                     timeout_seconds,
                     **retention_kwargs,
                 )
             else:
                 logger.info(
-                    f"job_id={job_id} run_id={run_id} step=prune mode=standard_prune"
+                    f"job_id={job_id} run_id={current_run_id} step=prune "
+                    f"mode=standard_prune"
                 )
                 rc, _, prune_err = await restic.restic_prune(
-                    repo_path, job.restic_password, timeout_seconds
+                    repo_path, job_password, timeout_seconds
                 )
 
             async with factory() as s:
-                run = await s.get(BackupRun, str(run_id))
-                if rc == 0:
-                    run.prune_status = PruneStatus.passed
-                    logger.info(
-                        f"job_id={job_id} run_id={run_id} step=prune status=passed"
-                    )
-                else:
-                    run.prune_status = PruneStatus.failed
-                    run.prune_error_output = prune_err
-                    logger.warning(
-                        f"job_id={job_id} run_id={run_id} step=prune "
-                        f"status=failed error=pruning_failed"
-                    )
-                await s.commit()
+                prune_run: BackupRun | None = await s.get(
+                    BackupRun, str(current_run_id)
+                )
+                if prune_run:
+                    if rc == 0:
+                        prune_run.prune_status = PruneStatus.passed  # type: ignore[assignment]
+                        logger.info(
+                            f"job_id={job_id} run_id={current_run_id} step=prune "
+                            f"status=passed"
+                        )
+                    else:
+                        prune_run.prune_status = PruneStatus.failed  # type: ignore[assignment]
+                        prune_run.prune_error_output = prune_err  # type: ignore[assignment]
+                        logger.warning(
+                            f"job_id={job_id} run_id={current_run_id} step=prune "
+                            f"status=failed error=pruning_failed"
+                        )
+                    await s.commit()
 
             # Step 9: Reconcile snapshots
-            rc, snapshots, _ = await restic.restic_snapshots(
-                repo_path, job.restic_password
-            )
-            run_finished_at: datetime = datetime.now(timezone.utc)
+            rc, snapshots, _ = await restic.restic_snapshots(repo_path, job_password)
             if rc == 0:
                 async with factory() as s:
                     result = await s.execute(
                         select(Snapshot).where(Snapshot.job_id == str(job_id))
                     )
-                    existing_snaps: list[Any] = result.scalars().all()
-                    snap_ids: Set[Any] = {snap["id"] for snap in snapshots}
+                    existing_snaps = result.scalars().all()
+                    snap_ids: Set[str] = {snap["id"] for snap in snapshots}
 
                     # Delete pruned snapshots
                     for snap in existing_snaps:
@@ -359,10 +419,10 @@ async def run_backup(job_id: uuid.UUID, run_id: Optional[uuid.UUID] = None) -> N
 
                     # Upsert snapshots
                     for snap in snapshots:
-                        result = await s.execute(
+                        snap_result = await s.execute(
                             select(Snapshot).where(Snapshot.snapshot_id == snap["id"])
                         )
-                        existing = result.scalars().first()
+                        existing: Snapshot | None = snap_result.scalars().first()
 
                         snap_time_str: Optional[str] = snap.get("time")
                         snap_time: Optional[datetime] = None
@@ -372,142 +432,176 @@ async def run_backup(job_id: uuid.UUID, run_id: Optional[uuid.UUID] = None) -> N
                             )
 
                         if existing:
-                            existing.snapshot_time = snap_time
-                            existing.hostname = snap.get("hostname")
-                            existing.paths = snap.get("paths")
-                            existing.tags = snap.get("tags")
-                            existing.size_bytes = snap.get("total_size")
+                            hostname: str | None = snap.get("hostname")
+                            paths: list[str] | None = snap.get("paths")
+                            tags: list[str] | None = snap.get("tags")
+                            size_bytes: int | None = snap.get("total_size")
+
+                            existing.snapshot_time = snap_time  # type: ignore[assignment]
+                            existing.hostname = hostname  # type: ignore[assignment]
+                            existing.paths = paths  # type: ignore[assignment]
+                            existing.tags = tags  # type: ignore[assignment]
+                            existing.size_bytes = size_bytes  # type: ignore[assignment]
                         else:
-                            new_snap = Snapshot(
+                            hostname: str | None = snap.get("hostname")
+                            paths: list[str] | None = snap.get("paths")
+                            tags: list[str] | None = snap.get("tags")
+                            size_bytes: int | None = snap.get("total_size")
+
+                            new_snap: Snapshot = Snapshot(
                                 id=str(uuid.uuid4()),
                                 job_id=str(job_id),
                                 snapshot_id=snap["id"],
                                 snapshot_time=snap_time,
-                                hostname=snap.get("hostname"),
-                                paths=snap.get("paths"),
-                                tags=snap.get("tags"),
-                                size_bytes=snap.get("total_size"),
-                                captured_at=run_finished_at,
+                                hostname=hostname,
+                                paths=paths,
+                                tags=tags,
+                                size_bytes=size_bytes,
+                                captured_at=datetime.now(timezone.utc),
                             )
-                            if snap["id"] == summary.get("snapshot_id"):
-                                new_snap.run_id = str(run_id)
+                            if summary and snap["id"] == summary.get("snapshot_id"):
+                                new_snap.run_id = str(current_run_id)  # type: ignore[assignment]
                             s.add(new_snap)
 
                     await s.commit()
         else:
             # If backup failed, skip steps 8-9 and mark them as skipped
             async with factory() as s:
-                run = await s.get(BackupRun, str(run_id))
-                if run.prune_status is None:
-                    run.prune_status = PruneStatus.skipped
-                if run.check_status is None:
-                    run.check_status = CheckStatus.skipped
-                await s.commit()
-            run_finished_at = datetime.now(timezone.utc)
+                skip_run: BackupRun | None = await s.get(BackupRun, str(current_run_id))
+                if skip_run:
+                    prune_status: Any = skip_run.prune_status
+                    if not prune_status:
+                        skip_run.prune_status = PruneStatus.skipped  # type: ignore[assignment]
+                    check_status: Any = skip_run.check_status
+                    if not check_status:
+                        skip_run.check_status = CheckStatus.skipped  # type: ignore[assignment]
+                    await s.commit()
 
         # Step 10: Finalize run
-        now: datetime = run_finished_at
+        now: datetime = datetime.now(timezone.utc)
+        final_run: BackupRun | None = None
         async with factory() as s:
-            run = await s.get(BackupRun, str(run_id))
-            if run.status == RunStatus.running:
-                run.status = RunStatus.success
-            run.finished_at = now
-            now_naive: datetime = now.replace(tzinfo=None)
-            run.duration_seconds = int((now_naive - run.started_at).total_seconds())
-            if run.check_status is None:
-                run.check_status = CheckStatus.skipped
-            await s.commit()
+            final_run = await s.get(BackupRun, str(current_run_id))
+            if final_run:
+                final_status: Any = final_run.status
+                if final_status == RunStatus.running:
+                    final_run.status = RunStatus.success  # type: ignore[assignment]
+                final_run.finished_at = now  # type: ignore[assignment]
+                now_naive: datetime = now.replace(tzinfo=None)
+                duration_secs: int = int(
+                    (now_naive - final_run.started_at).total_seconds()
+                )
+                final_run.duration_seconds = duration_secs  # type: ignore[assignment]
+                final_check_status: Any = final_run.check_status
+                if not final_check_status:
+                    final_run.check_status = CheckStatus.skipped  # type: ignore[assignment]
+                await s.commit()
 
         # Step 11: Completion notification
-        if settings_dict.get("ntfy_topic"):
-            if run.status == RunStatus.success and settings_dict.get(
+        ntfy_topic_send: str | None = cast(str | None, settings_dict.get("ntfy_topic"))
+        if ntfy_topic_send and final_run:
+            final_status_notify: Any = final_run.status
+            if final_status_notify == RunStatus.success and settings_dict.get(
                 "notify_on_success"
             ):
-                msg = f"Duration: {run.duration_seconds}s, Files: {run.files_changed}"
+                msg: str = (
+                    f"Duration: {final_run.duration_seconds}s, "
+                    f"Files: {final_run.files_changed}"
+                )
                 await send_notification(
-                    settings_dict.get("ntfy_server_url"),
-                    settings_dict.get("ntfy_topic"),
+                    cast(str | None, settings_dict.get("ntfy_server_url")),
+                    ntfy_topic_send,
                     f"Backup succeeded: {job.name}",
                     msg,
-                    token=settings_dict.get("ntfy_token"),
+                    token=cast(str | None, settings_dict.get("ntfy_token")),
                 )
-            elif run.status == RunStatus.failed and settings_dict.get(
+            elif final_status_notify == RunStatus.failed and settings_dict.get(
                 "notify_on_failure"
             ):
+                error_output: str | None = cast(str | None, final_run.error_output)
                 error_excerpt: str = (
-                    (run.error_output or "")[:200]
-                    if run.error_output
-                    else "Unknown error"
+                    (error_output or "")[:200] if error_output else "Unknown error"
                 )
                 await send_notification(
-                    settings_dict.get("ntfy_server_url"),
-                    settings_dict.get("ntfy_topic"),
+                    cast(str | None, settings_dict.get("ntfy_server_url")),
+                    ntfy_topic_send,
                     f"Backup failed: {job.name}",
                     error_excerpt,
-                    token=settings_dict.get("ntfy_token"),
+                    token=cast(str | None, settings_dict.get("ntfy_token")),
                 )
 
         # Step 12: Integrity check
-        if job.check_enabled and run.status == RunStatus.success:
-            logger.info(
-                f"job_id={job_id} run_id={run_id} step=integrity_check "
-                f"mode={job.check_mode.value} enabled=true"
-            )
-            if settings_dict.get("notify_on_verification"):
-                await send_notification(
-                    settings_dict.get("ntfy_server_url"),
-                    settings_dict.get("ntfy_topic"),
-                    f"Verification started: {job.name}",
-                    "Running integrity check...",
-                    token=settings_dict.get("ntfy_token"),
+        job_check_enabled: bool = cast(bool, job.check_enabled)
+        if job_check_enabled and final_run:
+            final_status_check: Any = final_run.status
+            if final_status_check == RunStatus.success:
+                job_check_mode: str = cast(str, job.check_mode.value)
+                job_check_percent: int | None = cast(
+                    int | None, job.check_subset_percent
+                )
+                logger.info(
+                    f"job_id={job_id} run_id={current_run_id} step=integrity_check "
+                    f"mode={job_check_mode} enabled=true"
+                )
+                if settings_dict.get("notify_on_verification"):
+                    await send_notification(
+                        cast(str | None, settings_dict.get("ntfy_server_url")),
+                        cast(str | None, settings_dict.get("ntfy_topic")),
+                        f"Verification started: {job.name}",
+                        "Running integrity check...",
+                        token=cast(str | None, settings_dict.get("ntfy_token")),
+                    )
+
+                job_check_timeout: int | None = cast(
+                    int | None, job.check_timeout_hours
+                )
+                check_timeout: int = (job_check_timeout or default_timeout) * 3600
+                rc, _, check_err = await restic.restic_check(
+                    repo_path,
+                    job_password,
+                    job_check_mode,
+                    job_check_percent,
+                    check_timeout,
                 )
 
-            check_timeout = (
-                job.check_timeout_hours
-                or settings_dict.get("default_job_timeout_hours", 24)
-            ) * 3600
-            rc, _, check_err = await restic.restic_check(
-                repo_path,
-                job.restic_password,
-                job.check_mode.value,
-                job.check_subset_percent,
-                check_timeout,
-            )
-
-            async with factory() as s:
-                run = await s.get(BackupRun, str(run_id))
-                if rc == 0:
-                    run.check_status = CheckStatus.passed
-                    logger.info(
-                        f"job_id={job_id} run_id={run_id} step=integrity_check "
-                        f"status=passed"
+                async with factory() as s:
+                    check_run: BackupRun | None = await s.get(
+                        BackupRun, str(current_run_id)
                     )
-                else:
-                    run.check_status = CheckStatus.failed
-                    run.check_error_output = check_err
-                    logger.warning(
-                        f"job_id={job_id} run_id={run_id} step=integrity_check "
-                        f"status=failed error=check_failed"
-                    )
-                await s.commit()
+                    if check_run:
+                        if rc == 0:
+                            check_run.check_status = CheckStatus.passed  # type: ignore[assignment]
+                            logger.info(
+                                f"job_id={job_id} run_id={current_run_id} "
+                                f"step=integrity_check status=passed"
+                            )
+                        else:
+                            check_run.check_status = CheckStatus.failed  # type: ignore[assignment]
+                            check_run.check_error_output = check_err  # type: ignore[assignment]
+                            logger.warning(
+                                f"job_id={job_id} run_id={current_run_id} "
+                                f"step=integrity_check status=failed error=check_failed"
+                            )
+                        await s.commit()
 
-            if settings_dict.get("notify_on_verification"):
-                status_str: str = "passed" if rc == 0 else "failed"
-                await send_notification(
-                    settings_dict.get("ntfy_server_url"),
-                    settings_dict.get("ntfy_topic"),
-                    f"Verification {status_str}: {job.name}",
-                    f"Check status: {status_str}",
-                    token=settings_dict.get("ntfy_token"),
-                )
+                if settings_dict.get("notify_on_verification"):
+                    status_str: str = "passed" if rc == 0 else "failed"
+                    await send_notification(
+                        cast(str | None, settings_dict.get("ntfy_server_url")),
+                        cast(str | None, settings_dict.get("ntfy_topic")),
+                        f"Verification {status_str}: {job.name}",
+                        f"Check status: {status_str}",
+                        token=cast(str | None, settings_dict.get("ntfy_token")),
+                    )
         else:
-            if not job.check_enabled:
+            if not job_check_enabled:
                 logger.debug(
-                    f"job_id={job_id} run_id={run_id} step=integrity_check "
+                    f"job_id={job_id} run_id={current_run_id} step=integrity_check "
                     f"enabled=false skipped"
                 )
 
     finally:
         # Cleanup: remove job from active set
         _active_jobs.discard(job_id)
-        logger.info(f"job_id={job_id} run_id={run_id} backup_completed")
+        if current_run_id is not None:
+            logger.info(f"job_id={job_id} run_id={current_run_id} backup_completed")

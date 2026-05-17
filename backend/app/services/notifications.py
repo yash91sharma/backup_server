@@ -9,19 +9,19 @@ logger = get_logger(__name__)
 
 @log_call
 async def send_notification(
-    server_url: str,
-    topic: str,
+    server_url: Optional[str],
+    topic: Optional[str],
     title: str,
     message: str,
     token: Optional[str] = None,
 ) -> None:
     """Send a push notification via ntfy.
 
-    Silently no-ops when topic is empty, so callers do not need to guard
-    against unconfigured notification settings.  The Authorization header is
-    included only when a token is provided.
+    Silently no-ops when server_url or topic are empty, so callers do not need
+    to guard against unconfigured notification settings. The Authorization
+    header is included only when a token is provided.
     """
-    if not topic:
+    if not topic or not server_url:
         logger.debug("notification skipped: empty topic")
         return
 

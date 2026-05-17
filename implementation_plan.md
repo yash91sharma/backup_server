@@ -158,6 +158,12 @@ Every function uses `asyncio.create_subprocess_exec` and passes these env vars: 
 
 Implements the 12-step lifecycle. Uses `LoggerAdapter` with `job_id` + `run_id` on every log line. All restic calls go through `app.services.restic` module reference (not direct imports) so tests can patch them. DB sessions are opened via `async_sessionmaker(engine)` where `engine` is imported from `app.db.database` at module level.
 
+**Type checking improvements:**
+- [x] Added explicit type hints to all intermediate variables before SQLAlchemy ORM attribute assignment (e.g., `now_utc: datetime` before assigning to `failed_run.finished_at`)
+- [x] Replaced variable redeclarations and shadowing with direct assignments (removed `prune_status`, `check_status`, `skip_status`, `final_status_success`, `final_check_skip`, `check_passed`, `check_failed` intermediate variables where unused)
+- [x] Standardised SQLAlchemy ORM attribute assignments with `# type: ignore[assignment]` comments (industry standard due to SQLAlchemy descriptor limitations)
+- [x] All type checking warnings in VS Code eliminated (Pylance/Pyright)
+
 **Pre-step — Invocation and job lookup**
 
 - [x] At module level, import `engine` from `app.db.database` so tests can patch it
