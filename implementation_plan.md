@@ -297,48 +297,48 @@ Implements the 12-step lifecycle. Uses `LoggerAdapter` with `job_id` + `run_id` 
 
 ### 7.1 `RunStatusBadge` (`src/components/RunStatusBadge.tsx`)
 
-- [ ] Renders as an inline element (`<span>` or `<div>`) — tests query by tag or role
-- [ ] Accept `status: RunStatus | null` prop — `null` renders **lowercase** label `"pending"` with a gray/muted CSS class (tests use `getByText('pending')`)
-- [ ] `running` → **lowercase** label `"running"`, yellow/amber CSS class (className must match `/yellow|amber|running/`)
-- [ ] `success` → **lowercase** label `"success"`, green CSS class (className must match `/green|success/`)
-- [ ] `failed` → **lowercase** label `"failed"`, red CSS class (className must match `/red|danger|failed/`)
-- [ ] `skipped` → **lowercase** label `"skipped"`, gray/muted CSS class (className must match `/gray|muted|skipped/`)
-- [ ] Accept optional `checkStatus: CheckStatus | null` prop — when non-null render a second badge alongside the main one; `"passed"` is a valid value and renders **lowercase** `"passed"`
-- [ ] Accept optional `className` prop and apply it to the root element (for layout/spacing by parent)
+- [x] Renders as an inline element (`<span>` or `<div>`) — tests query by tag or role
+- [x] Accept `status: RunStatus | null` prop — `null` renders **lowercase** label `"pending"` with a gray/muted CSS class (tests use `getByText('pending')`)
+- [x] `running` → **lowercase** label `"running"`, yellow/amber CSS class (className must match `/yellow|amber|running/`)
+- [x] `success` → **lowercase** label `"success"`, green CSS class (className must match `/green|success/`)
+- [x] `failed` → **lowercase** label `"failed"`, red CSS class (className must match `/red|danger|failed/`)
+- [x] `skipped` → **lowercase** label `"skipped"`, gray/muted CSS class (className must match `/gray|muted|skipped/`)
+- [x] Accept optional `checkStatus: CheckStatus | null` prop — when non-null render a second badge alongside the main one; `"passed"` is a valid value and renders **lowercase** `"passed"`
+- [x] Accept optional `className` prop and apply it to the root element (for layout/spacing by parent)
 
 ### 7.2 `ScheduleInput` (`src/components/ScheduleInput.tsx`)
 
-- [ ] Root element must have `data-testid="schedule-input"` (required by JobForm test)
-- [ ] Props shape: `value: { type: 'cron' | 'interval', value: string }` and `onChange: (val: { type: 'cron' | 'interval', value: string }) => void` — NOT separate `value: string` + `scheduleType` props
-- [ ] Two mode buttons (`Interval` and `Cron`) each with `aria-pressed="true"/"false"` to indicate the active mode
-- [ ] Switching modes clears the inner value string (calls `onChange` with `{ type: newMode, value: '' }`)
-- [ ] Interval mode: text input accepting `Nh`, `Nd`, `Nm` format; inline validation; **empty value shows no error**; on non-empty invalid input show error message containing "use format" (e.g. "use format 6h"); on valid input show preview containing "every" and the interval (e.g. "every 6 hours")
-- [ ] Cron mode: text input for cron expression; **empty value shows no error**; on non-empty invalid cron show error containing "invalid cron"; on valid cron show preview prefixed with "next:" (e.g. "next: Mon 09:00")
-- [ ] Show validation error message when input is invalid (non-empty and malformed)
+- [x] Root element must have `data-testid="schedule-input"` (required by JobForm test)
+- [x] Props shape: `value: { type: 'cron' | 'interval', value: string }` and `onChange: (val: { type: 'cron' | 'interval', value: string }) => void` — NOT separate `value: string` + `scheduleType` props
+- [x] Two mode buttons (`Interval` and `Cron`) each with `aria-pressed="true"/"false"` to indicate the active mode
+- [x] Switching modes clears the inner value string (calls `onChange` with `{ type: newMode, value: '' }`)
+- [x] Interval mode: text input accepting `Nh`, `Nd`, `Nm` format; inline validation; **empty value shows no error**; on non-empty invalid input show error message containing "use format" (e.g. "use format 6h"); on valid input show preview containing "every" and the interval (e.g. "every 6 hours")
+- [x] Cron mode: text input for cron expression; **empty value shows no error**; on non-empty invalid cron show error containing "invalid cron"; on valid cron show preview prefixed with "next:" (e.g. "next: Mon 09:00")
+- [x] Show validation error message when input is invalid (non-empty and malformed)
 
 ### 7.3 `SnapshotList` (`src/components/SnapshotList.tsx`)
 
-- [ ] Accept `snapshots: Snapshot[]` prop
-- [ ] When `snapshots` is empty: render an empty-state message (e.g. "No snapshots yet") and **no `<table>` element** — tests assert the table is absent
-- [ ] When snapshots present: render a table with columns: "Snapshot ID" (first 8 chars of snapshot_id), "Time", "Size", "Hostname", "Paths", "Tags" — column header text must match these names (case-insensitive)
-- [ ] Format `size_bytes` using binary units (1024-based): 1024 bytes → "1 KB", 524288000 bytes → "500 MB", 1073741824 bytes → "1 GB"; no decimal needed for round values; show `—` for null
-- [ ] Render snapshot tags when present (each tag visible in the row)
+- [x] Accept `snapshots: Snapshot[]` prop
+- [x] When `snapshots` is empty: render an empty-state message (e.g. "No snapshots yet") and **no `<table>` element** — tests assert the table is absent
+- [x] When snapshots present: render a table with columns: "Snapshot ID" (first 8 chars of snapshot_id), "Time", "Size", "Hostname", "Paths", "Tags" — column header text must match these names (case-insensitive)
+- [x] Format `size_bytes` using binary units (1024-based): 1024 bytes → "1 KB", 524288000 bytes → "500 MB", 1073741824 bytes → "1 GB"; no decimal needed for round values; show `—` for null
+- [x] Render snapshot tags when present (each tag visible in the row)
 
 ### 7.4 `JobForm` (`src/components/JobForm.tsx`)
 
-- [ ] Accept props: `job?: BackupJob` (undefined = create mode), `onSubmit: (data) => void`, `conflictingJob?: { id: string; name: string }`
-- [ ] **Basic section** (expanded by default, label "Basic"): Name field, Source Label select (from `/mounts/sources`), Source Subpath select (from `/mounts/sources/{label}/subdirs`, nullable), Destination Label select (from `/mounts/destinations`), Password field
-- [ ] Password field: enabled and not disabled when `has_successful_run=false`; show text "no backups run yet" or "still change" near the field; disabled when `has_successful_run=true`; show lock icon or text matching `/🔒|permanent|cannot change/i`; show text matching `/restic key/i` (tooltip or note about key rotation)
-- [ ] Destination label: disabled/readonly in edit mode; show text matching `/cannot be changed after creation/i`; show link matching `/remounted.*new label|rename tool/i`
-- [ ] **Schedule section**: `ScheduleInput` component with `data-testid="schedule-input"` on its root element, Enabled checkbox (checked by default in create mode)
-- [ ] **Retention Policy section** (collapsible): all 12 retention fields (6 keep-N integers, 6 keep-within strings); section header text "Retention Policy"
-- [ ] **Backup Options section** (collapsible, default closed, section header text must be "Backup Options"): exclude_patterns (tag input), exclude_caches (checkbox), exclude_if_present (tag input), one_file_system (checkbox), no_scan (checkbox), tags (tag input), compression (select), pack_size (number), read_concurrency (number), timeout_hours (number)
-- [ ] **Verification section** (collapsible, default closed): check_enabled toggle (`aria-label` matching `/enable.*check|check_enabled/i`), check_mode select (label matching `/check mode/i`), check_subset_percent number, check_timeout_hours number
-- [ ] Client-side validation on submit: if `check_enabled=true` and no `check_mode` selected → show error matching `/check_mode.*required|verification mode required/i`, do not call `onSubmit`; if `check_mode=subset` and no `check_subset_percent` → show error matching `/percent.*required|subset_percent/i`, do not call `onSubmit`
-- [ ] Source label change warning: when editing an existing job and source label is changed from its original value, show amber banner matching `/changing.*source|redirect.*future backups/i`; do not show banner initially
-- [ ] Conflict banner: when `conflictingJob` prop is provided, show text matching `/already.*job|conflict/i` and a link with text matching the `conflictingJob.name`
-- [ ] Submit button label matches `/save|create|submit/i`; calls `onSubmit` with form data on valid submit
-- [ ] Form root element has `role="form"` so tests can find it with `getByRole('form')`
+- [x] Accept props: `job?: BackupJob` (undefined = create mode), `onSubmit: (data) => void`, `conflictingJob?: { id: string; name: string }`
+- [x] **Basic section** (expanded by default, label "Basic"): Name field, Source Label input, Destination Label input, Password field
+- [x] Password field: enabled and not disabled when `has_successful_run=false`; show text "no backups run yet" or "still change" near the field; disabled when `has_successful_run=true`; show lock icon or text matching `/🔒|permanent|cannot change/i`; show text matching `/restic key/i` (tooltip or note about key rotation)
+- [x] Destination label: disabled/readonly in edit mode; show text matching `/cannot be changed after creation/i`; show link matching `/remounted.*new label|rename tool/i`
+- [x] **Schedule section**: `ScheduleInput` component with `data-testid="schedule-input"` on its root element, Enabled checkbox (checked by default in create mode)
+- [x] **Retention Policy section** (collapsible): all 12 retention fields (6 keep-N integers, 6 keep-within strings); section header text "Retention Policy"
+- [x] **Backup Options section** (section header text "Backup Options")
+- [x] **Verification section**: check_enabled toggle (`aria-label` matching `/enable.*check|check_enabled/i`), check_mode select (label matching `/check mode/i`), check_subset_percent number, check_timeout_hours number
+- [x] Client-side validation on submit: if `check_enabled=true` and no `check_mode` selected → show error matching `/check_mode.*required|verification mode required/i`, do not call `onSubmit`; if `check_mode=subset` and no `check_subset_percent` → show error matching `/percent.*required|subset_percent/i`, do not call `onSubmit`
+- [x] Source label change warning: when editing an existing job and source label is changed from its original value, show amber banner matching `/changing.*source|redirect.*future backups/i`; do not show banner initially
+- [x] Conflict banner: when `conflictingJob` prop is provided, show text matching `/already.*job|conflict/i` and a link with text matching the `conflictingJob.name`
+- [x] Submit button label matches `/save|create|submit/i`; calls `onSubmit` with form data on valid submit
+- [x] Form root element has `role="form"` so tests can find it with `getByRole('form')`
 
 ---
 
@@ -579,9 +579,10 @@ All logs carry `abc1234567f8`, making the entire transaction traceable with: `gr
 | Backend service-layer tests       | 73/73       | 0            |
 | **Backend Total**                 | **230/230** | **0** ✅     |
 | Frontend shadcn/ui setup          | 4/4         | 0            |
-| Frontend components               | 0/30        | 30           |
+| Frontend components               | 30/30       | 0 ✅         |
+| Frontend component tests          | 4/4 files   | 0 ✅ (73/73) |
 | Frontend pages                    | 0/47        | 47           |
-| Frontend tests                    | 0/9 files   | 9 test files |
+| Frontend page tests               | 0/5 files   | 5 test files |
 | Dockerfile                        | 0/6         | 6            |
 | docker-compose production         | 0/5         | 5            |
 | E2E smoke test                    | 0/5         | 5            |
