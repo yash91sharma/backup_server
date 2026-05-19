@@ -346,100 +346,100 @@ Implements the 12-step lifecycle. Uses `LoggerAdapter` with `job_id` + `run_id` 
 
 ### 8.1 `Dashboard` (`src/pages/Dashboard.tsx`)
 
-- [ ] Fetch `GET /api/runs/recent?limit=10` with TanStack Query
-- [ ] Fetch `GET /api/jobs` with TanStack Query (needed for stat cards and next run times)
-- [ ] Fetch `GET /api/health` with TanStack Query; display `restic_version` from the health response on the dashboard (e.g. in a stat card or info line)
-- [ ] Display stat cards: **total job count** and **enabled job count** (separate cards)
-- [ ] Display recent runs table: job name (link to `/runs/{id}`), `RunStatusBadge` (with `checkStatus` prop so both status and check_status badges appear), duration, started at, triggered by
-- [ ] Per-job next run time section: for each job show next run time or `"—"` if `next_run_time` is null or job is disabled
-- [ ] Show static disk space warning callout — text must match `/disk space.*not monitored/i` ("disk space" before "not monitored" in same element)
-- [ ] Show red error banner when `scheduler_running=false` — text must match `/scheduler.*not running/i`; a separate or same element must contain "container logs" (matches `/container logs/i`)
-- [ ] No error banner when `scheduler_running=true`
-- [ ] Poll `getRecentRuns` while any run has `status=running` OR (`status` terminal and `check_status` null); stop when all runs are settled
-- [ ] Show error state when `listJobs` or `getRecentRuns` API call fails
+- [x] Fetch `GET /api/runs/recent?limit=10` with TanStack Query
+- [x] Fetch `GET /api/jobs` with TanStack Query (needed for stat cards and next run times)
+- [x] Fetch `GET /api/health` with TanStack Query; display `restic_version` from the health response on the dashboard (e.g. in a stat card or info line)
+- [x] Display stat cards: **total job count** and **enabled job count** (separate cards)
+- [x] Display recent runs table: job name (link to `/runs/{id}`), `RunStatusBadge` (with `checkStatus` prop so both status and check_status badges appear), duration, started at, triggered by
+- [x] Per-job next run time section: for each job show next run time or `"—"` if `next_run_time` is null or job is disabled
+- [x] Show static disk space warning callout — text must match `/disk space.*not monitored/i` ("disk space" before "not monitored" in same element)
+- [x] Show red error banner when `scheduler_running=false` — text must match `/scheduler.*not running/i`; a separate or same element must contain "container logs" (matches `/container logs/i`)
+- [x] No error banner when `scheduler_running=true`
+- [x] Poll `getRecentRuns` while any run has `status=running` OR (`status` terminal and `check_status` null); stop when all runs are settled
+- [x] Show error state when `listJobs` or `getRecentRuns` API call fails
 
 ### 8.2 `Jobs` (`src/pages/Jobs.tsx`)
 
-- [ ] Fetch `GET /api/jobs` with TanStack Query; refetch on window focus
-- [ ] Render jobs table: Name, Source → Destination, Schedule, Last Run (status badge + relative time), Next Run, Enabled toggle
-- [ ] Enabled column shows text "Enabled" or "Disabled" per row (in addition to / or as the toggle label)
-- [ ] Enabled toggle: rendered as `role="switch"` or `role="checkbox"` (either is acceptable); calls `POST /jobs/{id}/enable` or `/disable`
-- [ ] "Run Now" button: calls `POST /jobs/{id}/run`; on 409 shows toast/message matching `/already.*running|in progress|409/i`; on success navigates to RunDetail `/runs/{run_id}`
-- [ ] "New Job" button: opens `JobForm` in a dialog or navigates to a form page
-- [ ] Row click: navigate to `/jobs/{id}`
-- [ ] Delete button: opens a **confirmation dialog** before calling `DELETE /jobs/{id}`
-  - [ ] Dialog contains text matching `/are you sure|cannot be undone/i`
-  - [ ] Dialog displays the job's name
-  - [ ] Confirm button: label must match `/confirm|yes.*delete|delete.*job/i`; clicking it calls `deleteJob` and closes dialog
-  - [ ] Cancel button: clicking it does NOT call `deleteJob` and closes dialog
-  - [ ] On 409 response: close dialog, show toast mentioning "active run" or "in progress"
-  - [ ] On non-409 error (e.g. 500): close dialog, show generic error toast
-  - [ ] On success: refetch jobs list
-- [ ] Show empty state when no jobs
-- [ ] Show loading skeleton while fetching
-- [ ] Show error state when `listJobs` API call fails
+- [x] Fetch `GET /api/jobs` with TanStack Query; refetch on window focus
+- [x] Render jobs table: Name, Source → Destination, Schedule, Last Run (status badge + relative time), Next Run, Enabled toggle
+- [x] Enabled column shows text "Enabled" or "Disabled" per row (in addition to / or as the toggle label)
+- [x] Enabled toggle: rendered as `role="switch"` or `role="checkbox"` (either is acceptable); calls `POST /jobs/{id}/enable` or `/disable`
+- [x] "Run Now" button: calls `POST /jobs/{id}/run`; on 409 shows toast/message matching `/already.*running|in progress|409/i`; on success navigates to RunDetail `/runs/{run_id}`
+- [x] "New Job" button: opens `JobForm` in a dialog or navigates to a form page
+- [x] Row click: navigate to `/jobs/{id}`
+- [x] Delete button: opens a **confirmation dialog** before calling `DELETE /jobs/{id}`
+  - [x] Dialog contains text matching `/are you sure|cannot be undone/i`
+  - [x] Dialog displays the job's name
+  - [x] Confirm button: label must match `/confirm|yes.*delete|delete.*job/i`; clicking it calls `deleteJob` and closes dialog
+  - [x] Cancel button: clicking it does NOT call `deleteJob` and closes dialog
+  - [x] On 409 response: close dialog, show toast mentioning "active run" or "in progress"
+  - [x] On non-409 error (e.g. 500): close dialog, show generic error toast
+  - [x] On success: refetch jobs list
+- [x] Show empty state when no jobs
+- [x] Show loading skeleton while fetching
+- [x] Show error state when `listJobs` API call fails
 
 ### 8.3 `JobDetail` (`src/pages/JobDetail.tsx`)
 
-- [ ] Fetch `GET /api/jobs/{id}` with TanStack Query
-- [ ] Show `enabled`/`disabled` badge or indicator prominently on the page (not just in edit form)
-- [ ] Show job config summary (source, destination, schedule, password status, retention, advanced options)
-- [ ] "Edit" button: opens `JobForm` pre-filled
-- [ ] "Run Now" button: calls `POST /jobs/{id}/run`; on 409 show inline error (not just toast) mentioning run already active; on success navigate to RunDetail
-- [ ] "Unlock" button:
-  - [ ] Disabled when any run in the runs list has `status=running`
-  - [ ] Disabled when any run has `check_status=null` (verification in progress)
-  - [ ] On click: calls `POST /jobs/{id}/unlock`
-  - [ ] On 409: show error toast mentioning "active run"
-  - [ ] On success: display the `output` text — must show text matching `/removed.*lock|successfully|output/i`
-- [ ] Tabs: **Runs**, **Snapshots**, and **Settings** (or "Configuration") — three tabs total
-- [ ] **Runs tab**: fetch `GET /api/jobs/{id}/runs`, table with status badge, duration, triggered by, started at; row click navigates to `/runs/{id}`
-- [ ] **Snapshots tab**: render `SnapshotList` with data from `GET /api/jobs/{id}/snapshots`
-- [ ] **Settings/Configuration tab**: display at minimum `source_label` and `schedule_value` (the current job configuration values)
-- [ ] Restore snippet: for each snapshot show a collapsible `restic restore` command (with repo path, snapshot ID, password env var placeholder)
-- [ ] 404 handling: redirect to `/jobs` if job not found
-- [ ] 500/other error handling: show text matching `/error|failed|could not load/i`
-- [ ] "Run Now" 409: show text matching `/already.*running|in progress|409/i`
+- [x] Fetch `GET /api/jobs/{id}` with TanStack Query
+- [x] Show `enabled`/`disabled` badge or indicator prominently on the page (not just in edit form)
+- [x] Show job config summary (source, destination, schedule, password status, retention, advanced options)
+- [x] "Edit" button: opens `JobForm` pre-filled
+- [x] "Run Now" button: calls `POST /jobs/{id}/run`; on 409 show inline error (not just toast) mentioning run already active; on success navigate to RunDetail
+- [x] "Unlock" button:
+  - [x] Disabled when any run in the runs list has `status=running`
+  - [x] Disabled when any run has `check_status=null` (verification in progress)
+  - [x] On click: calls `POST /jobs/{id}/unlock`
+  - [x] On 409: show error toast mentioning "active run"
+  - [x] On success: display the `output` text — must show text matching `/removed.*lock|successfully|output/i`
+- [x] Tabs: **Runs**, **Snapshots**, and **Settings** (or "Configuration") — three tabs total
+- [x] **Runs tab**: fetch `GET /api/jobs/{id}/runs`, table with status badge, duration, triggered by, started at; row click navigates to `/runs/{id}`
+- [x] **Snapshots tab**: render `SnapshotList` with data from `GET /api/jobs/{id}/snapshots`
+- [x] **Settings/Configuration tab**: display at minimum `source_label` and `schedule_value` (the current job configuration values)
+- [x] Restore snippet: for each snapshot show a collapsible `restic restore` command (with repo path, snapshot ID, password env var placeholder)
+- [x] 404 handling: redirect to `/jobs` if job not found
+- [x] 500/other error handling: show text matching `/error|failed|could not load/i`
+- [x] "Run Now" 409: show text matching `/already.*running|in progress|409/i`
 
 ### 8.4 `RunDetail` (`src/pages/RunDetail.tsx`)
 
-- [ ] Fetch `GET /api/runs/{id}` with TanStack Query
-- [ ] Show run header: job name (link), status badge, triggered by text, started at, duration
-- [ ] Duration formatted as human-readable (e.g. "3 min", "45 sec") — not raw seconds
-- [ ] `triggered_by` displayed as readable text (e.g. "Manual", "Scheduler")
-- [ ] `snapshot_id` displayed (first 8 chars) or `"—"` / `"N/A"` when null
-- [ ] Show stats section (files new/changed/unmodified, data added) when available
-- [ ] `data_added_bytes` formatted as GB or MB (not raw bytes)
-- [ ] Show `backup_output` in a scrollable pre block when status=success
-- [ ] Show `error_output` in a scrollable pre block when status=failed
-- [ ] When `error_output` contains "locked": show callout with text matching `/locked|repository.*lock|unlock/i`
-- [ ] Show `prune_status` badge for **all** states — `passed`, `failed`, `skipped` (not only on failure); show `prune_error_output` when `prune_status=failed`
-- [ ] Show `check_status` badge for all states; show `check_error_output` when `check_status=failed`
-- [ ] Poll while `status=running` OR (`status` terminal **and** `check_status` is `null`); stop only when `check_status` is non-null (this applies even when `status=failed`)
-- [ ] When `reason=overlapping_run`: show info card with text matching `/overlapping|already.*running|skipped.*previous/i`
-- [ ] When `reason=container_restart`: show info card with text matching `/container.*restart|was skipped.*restart/i`
-- [ ] 404 handling: show text matching `/not found|does not exist|404/i`
-- [ ] 500/other error handling: show text matching `/error|failed|could not load/i`
+- [x] Fetch `GET /api/runs/{id}` with TanStack Query
+- [x] Show run header: job name (link), status badge, triggered by text, started at, duration
+- [x] Duration formatted as human-readable (e.g. "3 min", "45 sec") — not raw seconds
+- [x] `triggered_by` displayed as readable text (e.g. "Manual", "Scheduler")
+- [x] `snapshot_id` displayed (first 8 chars) or `"—"` / `"N/A"` when null
+- [x] Show stats section (files new/changed/unmodified, data added) when available
+- [x] `data_added_bytes` formatted as GB or MB (not raw bytes)
+- [x] Show `backup_output` in a scrollable pre block when status=success
+- [x] Show `error_output` in a scrollable pre block when status=failed
+- [x] When `error_output` contains "locked": show callout with text matching `/locked|repository.*lock|unlock/i`
+- [x] Show `prune_status` badge for **all** states — `passed`, `failed`, `skipped` (not only on failure); show `prune_error_output` when `prune_status=failed`
+- [x] Show `check_status` badge for all states; show `check_error_output` when `check_status=failed`
+- [x] Poll while `status=running` OR (`status` terminal **and** `check_status` is `null`); stop only when `check_status` is non-null (this applies even when `status=failed`)
+- [x] When `reason=overlapping_run`: show info card with text matching `/overlapping|already.*running|skipped.*previous/i`
+- [x] When `reason=container_restart`: show info card with text matching `/container.*restart|was skipped.*restart/i`
+- [x] 404 handling: show text matching `/not found|does not exist|404/i`
+- [x] 500/other error handling: show text matching `/error|failed|could not load/i`
 
 ### 8.5 `Settings` (`src/pages/Settings.tsx`)
 
-- [ ] Fetch `GET /api/settings` with TanStack Query; show load error state if fetch fails
-- [ ] Form inputs are **controlled** — populated with current values from the API response on load
-- [ ] **Notifications section**: ntfy server URL (text input), topic (text input), token (masked/password input), per-event checkboxes: `notify_on_start`, `notify_on_success`, `notify_on_failure`, `notify_on_verification` — all four must be rendered
-- [ ] "Test" button: calls `POST /api/settings/test-ntfy`, shows success toast on `ok=true`, failure toast with error text on `ok=false`
-- [ ] **Defaults section**: default job timeout hours (number input, 1–168)
-- [ ] Save button: calls `PUT /api/settings`, shows success toast; shows inline error toast/message if save fails
-- [ ] **Restic section**: show current installed `restic_version` from settings; show text "not detected" when `restic_version` is `null`; "Check for update" button calls `GET /api/settings/restic-update-check`; display the **latest version string** from the response; show "update available" banner when `update_available=true`; show "up to date" when `update_available=false`; show "unavailable" or similar when `update_available=null`
-- [ ] **Rename Destination** section:
-  - [ ] Fetch `GET /mounts/destinations` with TanStack Query to populate the old-label select
-  - [ ] Old label: a `<select>` element populated from the mounted destinations list
-  - [ ] New label: a plain text `<input>` (not a select) for the user to type the new label
-  - [ ] "Rename" button: `role="button"`, label matching `/rename/i`; calls `POST /mounts/destinations/rename`
-  - [ ] On 409: show message matching `/already exists|conflict|409/i`
-  - [ ] On 404: show message matching `/not found|no longer.*exist|404/i`
-  - [ ] On 422: show message matching `/invalid|validation|422/i`
-  - [ ] On success: show text matching `/2.*job|job.*updated|affected/i` (count or "affected" keyword)
-- [ ] Show inline validation errors from API (422)
+- [x] Fetch `GET /api/settings` with TanStack Query; show load error state if fetch fails
+- [x] Form inputs are **controlled** — populated with current values from the API response on load
+- [x] **Notifications section**: ntfy server URL (text input), topic (text input), token (masked/password input), per-event checkboxes: `notify_on_start`, `notify_on_success`, `notify_on_failure`, `notify_on_verification` — all four must be rendered
+- [x] "Test" button: calls `POST /api/settings/test-ntfy`, shows success toast on `ok=true`, failure toast with error text on `ok=false`
+- [x] **Defaults section**: default job timeout hours (number input, 1–168)
+- [x] Save button: calls `PUT /api/settings`, shows success toast; shows inline error toast/message if save fails
+- [x] **Restic section**: show current installed `restic_version` from settings; show text "not detected" when `restic_version` is `null`; "Check for update" button calls `GET /api/settings/restic-update-check`; display the **latest version string** from the response; show "update available" banner when `update_available=true`; show "up to date" when `update_available=false`; show "unavailable" or similar when `update_available=null`
+- [x] **Rename Destination** section:
+  - [x] Fetch `GET /mounts/destinations` with TanStack Query to populate the old-label select
+  - [x] Old label: a `<select>` element populated from the mounted destinations list
+  - [x] New label: a plain text `<input>` (not a select) for the user to type the new label
+  - [x] "Rename" button: `role="button"`, label matching `/rename/i`; calls `POST /mounts/destinations/rename`
+  - [x] On 409: show message matching `/already exists|conflict|409/i`
+  - [x] On 404: show message matching `/not found|no longer.*exist|404/i`
+  - [x] On 422: show message matching `/invalid|validation|422/i`
+  - [x] On success: show text matching `/2.*job|job.*updated|affected/i` (count or "affected" keyword)
+- [x] Show inline validation errors from API (422)
 
 ---
 
@@ -447,15 +447,15 @@ Implements the 12-step lifecycle. Uses `LoggerAdapter` with `job_id` + `run_id` 
 
 ### 9.1 Tests that will pass once components/pages are implemented
 
-- [ ] `RunStatusBadge.test.tsx` — colour and label for all 4 statuses plus check status
-- [ ] `ScheduleInput.test.tsx` — cron vs interval toggle, validation, preview rendering
-- [ ] `SnapshotList.test.tsx` — table headers, size formatting (B/KB/MB/GB/null), empty state
-- [ ] `JobForm.test.tsx` — all sections render, password lock, destination immutability, source change warning, conflict banner, submit behaviour
-- [ ] `Dashboard.test.tsx` — stats cards, recent runs table, polling behaviour, error state
-- [ ] `Jobs.test.tsx` — table rendering, enable/disable toggle, Run Now, delete, create
-- [ ] `JobDetail.test.tsx` — tabs, unlock button, restore snippets, run list
-- [ ] `RunDetail.test.tsx` — output blocks by status, polling, reason explanations
-- [ ] `Settings.test.tsx` — ntfy form, test-ntfy, update check, rename destination
+- [x] `RunStatusBadge.test.tsx` — colour and label for all 4 statuses plus check status
+- [x] `ScheduleInput.test.tsx` — cron vs interval toggle, validation, preview rendering
+- [x] `SnapshotList.test.tsx` — table headers, size formatting (B/KB/MB/GB/null), empty state
+- [x] `JobForm.test.tsx` — all sections render, password lock, destination immutability, source change warning, conflict banner, submit behaviour
+- [x] `Dashboard.test.tsx` — stats cards, recent runs table, polling behaviour, error state
+- [x] `Jobs.test.tsx` — table rendering, enable/disable toggle, Run Now, delete, create
+- [x] `JobDetail.test.tsx` — tabs, unlock button, restore snippets, run list
+- [x] `RunDetail.test.tsx` — output blocks by status, polling, reason explanations
+- [x] `Settings.test.tsx` — ntfy form, test-ntfy, update check, rename destination
 
 ---
 

@@ -21,6 +21,7 @@ export default defineConfig({
     environment: 'jsdom',
     setupFiles: ['./src/test/setup.ts'],
     css: false,
+    clearMocks: true,
     pool: 'threads',
     poolOptions: {
       threads: {
