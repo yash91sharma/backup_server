@@ -473,25 +473,25 @@ Use Python's `contextvars` module to generate and store a unique request ID (UUI
 
 ### 10.3 Implementation Tasks
 
-- [ ] **10.3.1 Add contextvars to logging.py**: Import `contextvars`, create a `ContextVar("request_id")` that stores the current request ID (default `None`); create a `get_request_id()` function that returns the current value
+- [x] **10.3.1 Add contextvars to logging.py**: Import `contextvars`, create a `ContextVar("request_id")` that stores the current request ID (default `None`); create a `get_request_id()` function that returns the current value
 
-- [ ] **10.3.2 Modify RequestLoggingMiddleware**: Generate a unique request ID using `uuid.uuid4().hex[:12]` (12-char short form) on each HTTP request; set it in the context variable at the start of request processing; include it in the initial request log; ensure it persists through the async context
+- [x] **10.3.2 Modify RequestLoggingMiddleware**: Generate a unique request ID using `uuid.uuid4().hex[:12]` (12-char short form) on each HTTP request; set it in the context variable at the start of request processing; include it in the initial request log; ensure it persists through the async context
 
-- [ ] **10.3.3 Update logging format**: Change `basicConfig` format string from `"%(asctime)s %(levelname)s %(name)s %(message)s"` to include request ID field: `"%(asctime)s [%(request_id)s] %(levelname)s %(name)s:%(funcName)s - %(message)s"` (or similar readable format)
+- [x] **10.3.3 Update logging format**: Change `basicConfig` format string from `"%(asctime)s %(levelname)s %(name)s %(message)s"` to include request ID field: `"%(asctime)s [%(request_id)s] %(levelname)s %(name)s:%(funcName)s - %(message)s"` (or similar readable format)
 
-- [ ] **10.3.4 Implement LogRecord filter**: Create a custom `logging.Filter` subclass that injects the current request ID into every LogRecord via `record.request_id = get_request_id() or "none"`; register this filter on the root logger in `setup_logging()`
+- [x] **10.3.4 Implement LogRecord filter**: Create a custom `logging.Filter` subclass that injects the current request ID into every LogRecord via `record.request_id = get_request_id() or "none"`; register this filter on the root logger in `setup_logging()`
 
-- [ ] **10.3.5 Update @log_call decorator**: Ensure the decorator logs correctly with the new format (no changes needed if the filter is working); verify in tests that request ID appears in log output
+- [x] **10.3.5 Update @log_call decorator**: Ensure the decorator logs correctly with the new format (no changes needed if the filter is working); verify in tests that request ID appears in log output
 
-- [ ] **10.3.6 Test request traceability**: Write a test that:
+- [x] **10.3.6 Test request traceability**: Write a test that:
   - Simulates an HTTP request to a route that triggers `backup_runner.run_backup()`
   - Captures all log output
   - Verifies that every log line (from RequestLoggingMiddleware, backup_runner, restic, notifications) contains the **same request ID**
   - Example assertion: `assert all(request_id in line for line in log_lines)`
 
-- [ ] **10.3.7 Document logging format**: Update CLAUDE.md section 2.1 to describe the new request ID traceability feature; include example log output showing a complete request flow with consistent request ID
+- [x] **10.3.7 Document logging format**: Update CLAUDE.md section 2.1 to describe the new request ID traceability feature; include example log output showing a complete request flow with consistent request ID
 
-- [ ] **10.3.8 Verify existing tests still pass**: Run full test suite (`pytest`) to ensure LogRecord filter doesn't break any existing tests or log assertions
+- [x] **10.3.8 Verify existing tests still pass**: Run full test suite (`pytest`) to ensure LogRecord filter doesn't break any existing tests or log assertions
 
 ### 10.4 Expected Logging Output
 

@@ -13,7 +13,10 @@ from app.api.schemas.settings import (
     SettingsUpdate,
 )
 from app.core import scheduler as scheduler_module
+from app.core.logging import get_logger, log_call
 from app.db.models import AppSettings
+
+logger = get_logger(__name__)
 
 router = APIRouter(tags=["settings"])
 
@@ -21,6 +24,7 @@ router = APIRouter(tags=["settings"])
 _GITHUB_RESTIC_URL = "https://api.github.com/repos/restic/restic/releases/latest"
 
 
+@log_call
 async def _get_or_create_settings(session: AsyncSession) -> AppSettings:
     """Return AppSettings(id=1), creating it with defaults if it does not exist."""
     settings = await session.get(AppSettings, 1)
@@ -36,6 +40,7 @@ async def _get_or_create_settings(session: AsyncSession) -> AppSettings:
     return settings
 
 
+@log_call
 def _settings_response(settings: AppSettings) -> dict:
     """Build a SettingsResponse dict with ntfy_token always set to None."""
     return {
@@ -56,6 +61,7 @@ def _settings_response(settings: AppSettings) -> dict:
 
 
 @router.get("/settings", response_model=SettingsResponse)
+@log_call
 async def get_settings(session: AsyncSession = Depends(get_session)):
     """Return the current AppSettings, creating the singleton row if needed."""
     settings = await _get_or_create_settings(session)
@@ -66,6 +72,7 @@ async def get_settings(session: AsyncSession = Depends(get_session)):
 
 
 @router.put("/settings", response_model=SettingsResponse)
+@log_call
 async def update_settings(
     body: SettingsUpdate,
     session: AsyncSession = Depends(get_session),
@@ -84,6 +91,12 @@ async def update_settings(
     settings.default_job_timeout_hours = body.default_job_timeout_hours
 
     await session.commit()
+    logger.info(
+        "app settings updated ntfy_server=%s ntfy_topic=%s timeout_hours=%s",
+        settings.ntfy_server_url,
+        settings.ntfy_topic,
+        settings.default_job_timeout_hours,
+    )
     return _settings_response(settings)
 
 
@@ -91,6 +104,7 @@ async def update_settings(
 
 
 @router.post("/settings/test-ntfy", response_model=NtfyTestResult)
+@log_call
 async def test_ntfy(session: AsyncSession = Depends(get_session)):
     """Send a test notification via ntfy.
 
@@ -123,9 +137,18 @@ async def test_ntfy(session: AsyncSession = Depends(get_session)):
                 },
             )
         if resp.status_code == 200:
+            logger.info(
+                "ntfy test notification delivered topic=%s", settings.ntfy_topic
+            )
             return NtfyTestResult(ok=True)
+        logger.warning(
+            "ntfy test notification failed status=%s topic=%s",
+            resp.status_code,
+            settings.ntfy_topic,
+        )
         return NtfyTestResult(ok=False, error=f"HTTP {resp.status_code}: {resp.text}")
     except Exception as exc:
+        logger.warning("ntfy test notification errored: %s", exc)
         return NtfyTestResult(ok=False, error=str(exc))
 
 
@@ -133,6 +156,7 @@ async def test_ntfy(session: AsyncSession = Depends(get_session)):
 
 
 @router.get("/settings/restic-update-check", response_model=ResticUpdateCheck)
+@log_call
 async def restic_update_check(session: AsyncSession = Depends(get_session)):
     """Compare the installed restic version against the latest GitHub release.
 
@@ -152,7 +176,8 @@ async def restic_update_check(session: AsyncSession = Depends(get_session)):
             resp = await client.get(_GITHUB_RESTIC_URL)
         tag = resp.json().get("tag_name", "")
         latest = tag.lstrip("v") or None
-    except Exception:
+    except Exception as exc:
+        logger.warning("restic update check failed: %s", exc)
         return ResticUpdateCheck(current=current, latest=None, update_available=None)
 
     if latest is None:
@@ -171,6 +196,7 @@ async def restic_update_check(session: AsyncSession = Depends(get_session)):
 
 
 @router.get("/health", response_model=HealthResponse)
+@log_call
 async def health(session: AsyncSession = Depends(get_session)):
     """Return scheduler state, restic version, and DB liveness.
 
@@ -181,7 +207,8 @@ async def health(session: AsyncSession = Depends(get_session)):
     try:
         await session.execute(text("SELECT 1"))
         db_ok = True
-    except Exception:
+    except Exception as exc:
+        logger.error("health db check failed: %s", exc)
         db_ok = False
 
     settings = await session.get(AppSettings, 1)

@@ -14,8 +14,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_session
 from app.api.schemas.mounts import RenameDestinationRequest, RenameDestinationResult
+from app.core.logging import get_logger, log_call
 from app.db.models import BackupJob
 from app.services import backup_runner
+
+logger = get_logger(__name__)
 
 router = APIRouter(prefix="/mounts", tags=["mounts"])
 
@@ -24,6 +27,7 @@ SOURCES_ROOT = "/sources"
 DESTINATIONS_ROOT = "/destinations"
 
 
+@log_call
 def _list_dirs(root: str) -> List[str]:
     """Return the names of all immediate subdirectories under root.
 
@@ -41,6 +45,7 @@ def _list_dirs(root: str) -> List[str]:
 
 
 @router.get("/sources", response_model=List[str])
+@log_call
 async def list_sources():
     """Return directory names found directly under SOURCES_ROOT."""
     return _list_dirs(SOURCES_ROOT)
@@ -50,6 +55,7 @@ async def list_sources():
 
 
 @router.get("/sources/{label}/subdirs", response_model=List[str])
+@log_call
 async def list_source_subdirs(label: str):
     """Return immediate subdirectory names within a specific source mount.
 
@@ -65,6 +71,7 @@ async def list_source_subdirs(label: str):
 
 
 @router.get("/destinations", response_model=List[str])
+@log_call
 async def list_destinations():
     """Return directory names found directly under DESTINATIONS_ROOT."""
     return _list_dirs(DESTINATIONS_ROOT)
@@ -74,6 +81,7 @@ async def list_destinations():
 
 
 @router.post("/destinations/rename", response_model=RenameDestinationResult)
+@log_call
 async def rename_destination(
     body: RenameDestinationRequest,
     session: AsyncSession = Depends(get_session),
@@ -117,6 +125,12 @@ async def rename_destination(
     for job in jobs:
         job.destination_label = body.new_label
     await session.commit()
+    logger.info(
+        "destination renamed old=%s new=%s affected_jobs=%d",
+        body.old_label,
+        body.new_label,
+        len(jobs),
+    )
 
     return RenameDestinationResult(
         affected_jobs=[{"id": j.id, "name": j.name} for j in jobs]

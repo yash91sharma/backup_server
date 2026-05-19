@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_session
 from app.api.schemas.jobs import RunSummarySchema
 from app.api.schemas.runs import RunDetailSchema
+from app.core.logging import log_call
 from app.db.models import BackupJob, BackupRun
 
 router = APIRouter(prefix="/runs", tags=["runs"])
@@ -20,6 +21,7 @@ router = APIRouter(prefix="/runs", tags=["runs"])
 
 
 @router.get("/recent", response_model=List[RunSummarySchema])
+@log_call
 async def recent_runs(
     limit: int = Query(10, ge=1, le=100),
     session: AsyncSession = Depends(get_session),
@@ -50,6 +52,7 @@ async def recent_runs(
 
 
 @router.get("/{run_id}", response_model=RunDetailSchema)
+@log_call
 async def get_run(run_id: str, session: AsyncSession = Depends(get_session)):
     """Return a single run record with all output fields included."""
     run = await session.get(BackupRun, run_id)

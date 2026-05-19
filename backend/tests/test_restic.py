@@ -67,8 +67,12 @@ async def test_version_returns_none_on_timeout():
     proc.communicate = slow_communicate
     proc.kill = MagicMock()
 
+    async def fake_wait_for(coro, timeout):
+        coro.close()
+        raise asyncio.TimeoutError()
+
     with patch("asyncio.create_subprocess_exec", return_value=proc):
-        with patch("asyncio.wait_for", side_effect=asyncio.TimeoutError):
+        with patch("asyncio.wait_for", side_effect=fake_wait_for):
             result = await restic_version()
     assert result is None
 
@@ -189,8 +193,12 @@ async def test_backup_timeout_kills_process():
     proc.terminate = MagicMock()
     proc.wait = AsyncMock()
 
+    async def fake_wait_for(coro, timeout):
+        coro.close()
+        raise asyncio.TimeoutError()
+
     with patch("asyncio.create_subprocess_exec", return_value=proc):
-        with patch("asyncio.wait_for", side_effect=asyncio.TimeoutError):
+        with patch("asyncio.wait_for", side_effect=fake_wait_for):
             code, stdout, stderr, summary = await restic_backup(
                 REPO, PASSWORD, "/sources/documents", timeout_seconds=1
             )
@@ -385,8 +393,15 @@ async def test_forget_prune_timeout():
     proc.terminate = MagicMock()
     proc.wait = AsyncMock()
 
+    async def fake_wait_for(coro, timeout):
+        # The mocked communicate raises TimeoutError synchronously when called,
+        # so coro may not be a coroutine here; tolerate both shapes.
+        if hasattr(coro, "close"):
+            coro.close()
+        raise asyncio.TimeoutError()
+
     with patch("asyncio.create_subprocess_exec", return_value=proc):
-        with patch("asyncio.wait_for", side_effect=asyncio.TimeoutError):
+        with patch("asyncio.wait_for", side_effect=fake_wait_for):
             code, out, err = await restic_forget_prune(
                 REPO, PASSWORD, timeout_seconds=1, retain_keep_last=5
             )

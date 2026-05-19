@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 
 from sqlalchemy import (
@@ -16,6 +16,18 @@ from sqlalchemy import (
 )
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy.orm import DeclarativeBase, relationship
+
+
+def _utcnow() -> datetime:
+    """Naive UTC datetime for SQLAlchemy column defaults.
+
+    Returned as a naive datetime (no tzinfo) because the existing schema uses
+    ``DateTime`` without ``timezone=True``; storing tz-aware values there would
+    silently drop the tz on read.  Wrapping ``datetime.now(timezone.utc)`` keeps
+    us off the deprecated ``datetime.utcnow()`` API while preserving wire
+    compatibility.
+    """
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 class Base(DeclarativeBase):
@@ -110,10 +122,8 @@ class BackupJob(Base):
     check_subset_percent = Column(Integer, nullable=True)
     check_timeout_hours = Column(Integer, nullable=True)
 
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
-    updated_at = Column(
-        DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow
-    )
+    created_at = Column(DateTime, nullable=False, default=_utcnow)
+    updated_at = Column(DateTime, nullable=False, default=_utcnow, onupdate=_utcnow)
 
     runs = relationship("BackupRun", back_populates="job", cascade="all, delete-orphan")
     snapshots = relationship(

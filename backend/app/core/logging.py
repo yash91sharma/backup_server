@@ -2,13 +2,31 @@
 
 All modules must obtain loggers via get_logger() and annotate non-trivial
 functions with @log_call.  Sensitive fields are redacted automatically.
+
+Every HTTP request is assigned a 12-character request ID by
+``RequestLoggingMiddleware`` and propagated via ``contextvars`` so every log
+line emitted while handling that request carries the same ID.  This makes
+end-to-end debugging possible with ``grep "<request_id>" app.log``.
 """
 
+import contextvars
 import functools
 import inspect
 import logging
 import os
-from typing import Awaitable, Callable, Dict, List, Set, Tuple, TypeVar, cast, overload
+import uuid
+from typing import (
+    Awaitable,
+    Callable,
+    Dict,
+    List,
+    Optional,
+    Set,
+    Tuple,
+    TypeVar,
+    cast,
+    overload,
+)
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
@@ -18,6 +36,25 @@ F = TypeVar("F", bound=Callable[..., object])
 
 # Fields whose values are replaced with "***" in any logged mapping.
 SENSITIVE_FIELDS: Set[str] = {"restic_password", "ntfy_token"}
+
+# Per-request ID populated by RequestLoggingMiddleware; readable anywhere in
+# the async call stack via get_request_id().
+_request_id_var: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
+    "request_id", default=None
+)
+
+
+def get_request_id() -> Optional[str]:
+    """Return the current request's ID, or None if called outside a request."""
+    return _request_id_var.get()
+
+
+class RequestIdFilter(logging.Filter):
+    """Inject the current request_id (or ``"none"``) onto every LogRecord."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        record.request_id = get_request_id() or "none"
+        return True
 
 
 @overload
@@ -113,28 +150,81 @@ def log_call(fn: F) -> F:
     return cast(F, async_wrapper)
 
 
+LOG_FORMAT: str = (
+    "%(asctime)s [%(request_id)s] %(levelname)s %(name)s:%(funcName)s - %(message)s"
+)
+
+_OUR_HANDLER_FLAG: str = "_backup_server_log_handler"
+_factory_installed: bool = False
+
+
+def _install_request_id_factory() -> None:
+    """Install a LogRecordFactory that stamps every record with request_id.
+
+    Using a factory (in addition to RequestIdFilter) means the attribute is
+    present on every LogRecord at creation time, so handlers added later
+    (e.g. pytest's caplog handler) see it without extra wiring.  Idempotent.
+    """
+    global _factory_installed
+    if _factory_installed:
+        return
+    base_factory = logging.getLogRecordFactory()
+
+    def factory(*args: object, **kwargs: object) -> logging.LogRecord:
+        record = base_factory(*args, **kwargs)
+        record.request_id = get_request_id() or "none"
+        return record
+
+    logging.setLogRecordFactory(factory)
+    _factory_installed = True
+
+
 def setup_logging() -> None:
     """Configure root logger from LOG_LEVEL env var (default INFO).
 
-    Called once from the FastAPI lifespan handler.
+    Called once from the FastAPI lifespan handler.  Configures the format to
+    include the per-request ID and ensures every LogRecord carries the
+    ``request_id`` attribute via both a record factory and a filter.
+
+    Idempotent and non-destructive: never removes external handlers (e.g.
+    pytest's caplog handler) and never adds duplicate stream handlers.
     """
     level_str: str = os.environ.get("LOG_LEVEL", "INFO").upper()
-    logging.basicConfig(
-        level=level_str,
-        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+    root_logger = logging.getLogger()
+    root_logger.setLevel(level_str)
+
+    has_our_handler: bool = any(
+        getattr(h, _OUR_HANDLER_FLAG, False) for h in root_logger.handlers
     )
+    if not has_our_handler:
+        handler = logging.StreamHandler()
+        handler.setFormatter(logging.Formatter(LOG_FORMAT))
+        handler.addFilter(RequestIdFilter())
+        setattr(handler, _OUR_HANDLER_FLAG, True)
+        root_logger.addHandler(handler)
+
+    _install_request_id_factory()
 
 
 class RequestLoggingMiddleware(BaseHTTPMiddleware):
-    """Log every HTTP request with method, path, and response status."""
+    """Log every HTTP request with method, path, and response status.
+
+    Generates a 12-character hex request ID per request, stores it in the
+    ``_request_id_var`` ContextVar so every log line emitted while handling
+    the request carries the same ID, and clears the ContextVar on exit.
+    """
 
     async def dispatch(
         self, request: Request, call_next: Callable[[Request], Awaitable[Response]]
     ) -> Response:
-        response: Response = await call_next(request)
-        logger: logging.Logger = get_logger(__name__)
-        request_method: str = request.method
-        request_path: str = request.url.path
-        response_status: int = response.status_code
-        logger.info("%s %s → %s", request_method, request_path, response_status)
-        return response
+        request_id: str = uuid.uuid4().hex[:12]
+        token = _request_id_var.set(request_id)
+        try:
+            response: Response = await call_next(request)
+            logger: logging.Logger = get_logger(__name__)
+            logger.info(
+                "%s %s → %s", request.method, request.url.path, response.status_code
+            )
+            return response
+        finally:
+            _request_id_var.reset(token)

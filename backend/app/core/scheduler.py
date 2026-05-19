@@ -17,6 +17,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from app.core.logging import get_logger, log_call
 from app.db.database import engine
 from app.db.models import (
     AppSettings,
@@ -30,6 +31,8 @@ from app.db.models import (
 from app.services import restic as restic_svc
 from app.services.backup_runner import run_backup
 
+logger = get_logger(__name__)
+
 scheduler = AsyncIOScheduler(
     job_defaults={"misfire_grace_time": 3600, "coalesce": True},
 )
@@ -37,6 +40,7 @@ scheduler = AsyncIOScheduler(
 _INTERVAL_RE = re.compile(r"^([1-9][0-9]*)(h|d|m)$")
 
 
+@log_call
 def build_trigger(
     schedule_type: str, schedule_value: str
 ) -> Union[CronTrigger, IntervalTrigger]:
@@ -60,6 +64,7 @@ def build_trigger(
     raise ValueError(f"Unknown schedule_type: {schedule_type!r}")
 
 
+@log_call
 async def start_scheduler() -> None:
     """Run all startup tasks and start the scheduler.
 
@@ -124,12 +129,15 @@ async def start_scheduler() -> None:
     # while APScheduler does its own async work.
     for job in jobs:
         _register_job(job)
+    logger.info("scheduler registered %d enabled jobs at startup", len(jobs))
 
     # ── 6. Start scheduler ────────────────────────────────────────────────────
     if not scheduler.running:
         scheduler.start()
+        logger.info("scheduler started")
 
 
+@log_call
 def _register_job(job: BackupJob) -> None:
     """Add a single BackupJob to the scheduler."""
     trigger = build_trigger(job.schedule_type, job.schedule_value)
@@ -142,7 +150,9 @@ def _register_job(job: BackupJob) -> None:
     )
 
 
+@log_call
 async def shutdown_scheduler() -> None:
     """Gracefully stop the scheduler if it is running."""
     if scheduler.running:
         scheduler.shutdown(wait=False)
+        logger.info("scheduler stopped")

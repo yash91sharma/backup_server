@@ -23,6 +23,7 @@ from app.api.schemas.jobs import (
     SnapshotResponse,
 )
 from app.core import scheduler as scheduler_module
+from app.core.logging import get_logger, log_call
 from app.db.models import (
     BackupJob,
     BackupRun,
@@ -32,6 +33,8 @@ from app.db.models import (
     TriggeredBy,
 )
 from app.services import backup_runner, restic
+
+logger = get_logger(__name__)
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
 
@@ -44,6 +47,7 @@ _DESTINATIONS_ROOT = "/destinations"
 # ── Private helpers ───────────────────────────────────────────────────────────
 
 
+@log_call
 async def _get_job_or_404(job_id: str, session: AsyncSession) -> BackupJob:
     """Fetch a BackupJob by id or raise HTTP 404."""
     job = await session.get(BackupJob, job_id)
@@ -52,6 +56,7 @@ async def _get_job_or_404(job_id: str, session: AsyncSession) -> BackupJob:
     return job
 
 
+@log_call
 async def _has_successful_run(job_id: str, session: AsyncSession) -> bool:
     """Return True if the job has at least one run with status=success."""
     result = await session.execute(
@@ -62,6 +67,7 @@ async def _has_successful_run(job_id: str, session: AsyncSession) -> bool:
     return result.scalar_one_or_none() is not None
 
 
+@log_call
 async def _last_run(job_id: str, session: AsyncSession) -> RunSummarySchema | None:
     """Return the most recent BackupRun for the job, or None."""
     result = await session.execute(
@@ -74,12 +80,14 @@ async def _last_run(job_id: str, session: AsyncSession) -> RunSummarySchema | No
     return RunSummarySchema.model_validate(run) if run else None
 
 
+@log_call
 def _next_run_time(job_id: str) -> datetime | None:
     """Look up the job's next scheduled fire time from APScheduler."""
     sched_job = scheduler_module.scheduler.get_job(job_id)
     return sched_job.next_run_time if sched_job else None
 
 
+@log_call
 async def _build_job_response(job: BackupJob, session: AsyncSession) -> dict:
     """Assemble a JobResponse dict with computed fields injected."""
     return {
@@ -91,6 +99,7 @@ async def _build_job_response(job: BackupJob, session: AsyncSession) -> dict:
     }
 
 
+@log_call
 def _validate_mounts(source_label: str, destination_label: str) -> None:
     """Raise HTTP 422 if either mount directory does not exist."""
     if not os.path.isdir(f"{_SOURCES_ROOT}/{source_label}"):
@@ -107,6 +116,7 @@ def _validate_mounts(source_label: str, destination_label: str) -> None:
         )
 
 
+@log_call
 async def _check_duplicate(
     source_label: str,
     destination_label: str,
@@ -128,6 +138,7 @@ async def _check_duplicate(
         )
 
 
+@log_call
 def _register_in_scheduler(job: BackupJob) -> None:
     """Register or replace the job in APScheduler (only when scheduler is running)."""
     if not scheduler_module.scheduler.running:
@@ -142,14 +153,22 @@ def _register_in_scheduler(job: BackupJob) -> None:
         id=job.id,
         replace_existing=True,
     )
+    logger.info(
+        "scheduler registered job_id=%s schedule=%s/%s",
+        job.id,
+        job.schedule_type,
+        job.schedule_value,
+    )
 
 
+@log_call
 def _remove_from_scheduler(job_id: str) -> None:
     """Remove a job from APScheduler; silently ignore if not found."""
     if not scheduler_module.scheduler.running:
         return
     try:
         scheduler_module.scheduler.remove_job(job_id)
+        logger.info("scheduler removed job_id=%s", job_id)
     except JobLookupError:
         pass
 
@@ -158,6 +177,7 @@ def _remove_from_scheduler(job_id: str) -> None:
 
 
 @router.get("", response_model=List[JobResponse])
+@log_call
 async def list_jobs(session: AsyncSession = Depends(get_session)):
     """Return all backup jobs with computed fields (next_run_time, last_run, etc.)."""
     result = await session.execute(select(BackupJob))
@@ -169,6 +189,7 @@ async def list_jobs(session: AsyncSession = Depends(get_session)):
 
 
 @router.post("", response_model=JobResponse, status_code=201)
+@log_call
 async def create_job(body: JobCreate, session: AsyncSession = Depends(get_session)):
     """Create a new BackupJob.
 
@@ -184,6 +205,16 @@ async def create_job(body: JobCreate, session: AsyncSession = Depends(get_sessio
     session.add(job)
     await session.commit()
     await session.refresh(job)
+    logger.info(
+        "job created job_id=%s name=%s source=%s dest=%s schedule=%s/%s enabled=%s",
+        job.id,
+        job.name,
+        job.source_label,
+        job.destination_label,
+        job.schedule_type,
+        job.schedule_value,
+        job.enabled,
+    )
 
     if job.enabled:
         _register_in_scheduler(job)
@@ -195,6 +226,7 @@ async def create_job(body: JobCreate, session: AsyncSession = Depends(get_sessio
 
 
 @router.get("/{job_id}", response_model=JobResponse)
+@log_call
 async def get_job(job_id: str, session: AsyncSession = Depends(get_session)):
     """Return a single BackupJob by id."""
     job = await _get_job_or_404(job_id, session)
@@ -205,6 +237,7 @@ async def get_job(job_id: str, session: AsyncSession = Depends(get_session)):
 
 
 @router.put("/{job_id}", response_model=JobResponse)
+@log_call
 async def update_job(
     job_id: str,
     body: JobUpdate,
@@ -254,6 +287,11 @@ async def update_job(
     job.updated_at = datetime.now(timezone.utc)
     await session.commit()
     await session.refresh(job)
+    logger.info(
+        "job updated job_id=%s fields=%s",
+        job.id,
+        sorted(update_data.keys()),
+    )
 
     # Reschedule if the job is registered.
     if scheduler_module.scheduler.running:
@@ -263,6 +301,12 @@ async def update_job(
                 job.schedule_type, job.schedule_value
             )
             scheduler_module.scheduler.reschedule_job(job_id, trigger=trigger)
+            logger.info(
+                "scheduler rescheduled job_id=%s schedule=%s/%s",
+                job_id,
+                job.schedule_type,
+                job.schedule_value,
+            )
 
     return await _build_job_response(job, session)
 
@@ -271,6 +315,7 @@ async def update_job(
 
 
 @router.delete("/{job_id}", status_code=204)
+@log_call
 async def delete_job(job_id: str, session: AsyncSession = Depends(get_session)):
     """Delete a BackupJob (and its runs/snapshots via CASCADE).
 
@@ -288,12 +333,14 @@ async def delete_job(job_id: str, session: AsyncSession = Depends(get_session)):
     _remove_from_scheduler(job_id)
     await session.delete(job)
     await session.commit()
+    logger.info("job deleted job_id=%s name=%s", job_id, job.name)
 
 
 # ── POST /api/jobs/{id}/run ───────────────────────────────────────────────────
 
 
 @router.post("/{job_id}/run")
+@log_call
 async def trigger_run(
     job_id: str,
     background_tasks: BackgroundTasks,
@@ -321,6 +368,7 @@ async def trigger_run(
         )
         session.add(run)
         await session.commit()
+        logger.info("manual run skipped (overlap) job_id=%s run_id=%s", job_id, run.id)
         return {"run_id": run.id}
 
     run = BackupRun(
@@ -332,6 +380,7 @@ async def trigger_run(
     )
     session.add(run)
     await session.commit()
+    logger.info("manual run triggered job_id=%s run_id=%s", job_id, run.id)
 
     # Fire-and-forget: the route returns immediately with the run id.
     background_tasks.add_task(backup_runner.run_backup, job_uuid, uuid.UUID(run.id))
@@ -343,12 +392,14 @@ async def trigger_run(
 
 
 @router.post("/{job_id}/enable")
+@log_call
 async def enable_job(job_id: str, session: AsyncSession = Depends(get_session)):
     """Set enabled=True on the job and register it with the scheduler."""
     job = await _get_job_or_404(job_id, session)
     job.enabled = True
     await session.commit()
     _register_in_scheduler(job)
+    logger.info("job enabled job_id=%s", job_id)
     return {"id": job.id, "enabled": True}
 
 
@@ -356,12 +407,14 @@ async def enable_job(job_id: str, session: AsyncSession = Depends(get_session)):
 
 
 @router.post("/{job_id}/disable")
+@log_call
 async def disable_job(job_id: str, session: AsyncSession = Depends(get_session)):
     """Set enabled=False on the job and remove it from the scheduler."""
     job = await _get_job_or_404(job_id, session)
     job.enabled = False
     await session.commit()
     _remove_from_scheduler(job_id)
+    logger.info("job disabled job_id=%s", job_id)
     return {"id": job.id, "enabled": False}
 
 
@@ -369,6 +422,7 @@ async def disable_job(job_id: str, session: AsyncSession = Depends(get_session))
 
 
 @router.post("/{job_id}/unlock")
+@log_call
 async def unlock_job(job_id: str, session: AsyncSession = Depends(get_session)):
     """Run 'restic unlock' on the job's repository.
 
@@ -386,6 +440,7 @@ async def unlock_job(job_id: str, session: AsyncSession = Depends(get_session)):
     _rc, stdout, stderr = await restic.restic_unlock(
         repo_path=repo_path, password=job.restic_password
     )
+    logger.info("repository unlocked job_id=%s", job_id)
 
     return {"output": stdout or stderr}
 
@@ -394,6 +449,7 @@ async def unlock_job(job_id: str, session: AsyncSession = Depends(get_session)):
 
 
 @router.get("/{job_id}/runs", response_model=List[RunSummarySchema])
+@log_call
 async def list_job_runs(job_id: str, session: AsyncSession = Depends(get_session)):
     """Return all runs for a job ordered by started_at descending (newest first).
 
@@ -413,6 +469,7 @@ async def list_job_runs(job_id: str, session: AsyncSession = Depends(get_session
 
 
 @router.get("/{job_id}/snapshots", response_model=List[SnapshotResponse])
+@log_call
 async def list_job_snapshots(job_id: str, session: AsyncSession = Depends(get_session)):
     """Return all restic snapshots for a job ordered by snapshot_time descending."""
     await _get_job_or_404(job_id, session)
