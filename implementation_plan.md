@@ -459,85 +459,41 @@ Implements the 12-step lifecycle. Uses `LoggerAdapter` with `job_id` + `run_id` 
 
 ---
 
-## 10. Infrastructure
+## 10. Logging Enhancements — Request Traceability
 
-### 10.1 Dockerfile
-
-- [ ] Stage 1 `frontend-builder` (`node:22-alpine`): `npm ci`, `npm run build`, output `/frontend/dist/`
-- [ ] Stage 2 `restic-fetcher` (`alpine:3.21`): download restic binary, verify SHA256, decompress; accepts `RESTIC_VERSION` and `RESTIC_ARCH` build args; fail on unsupported arch
-- [ ] Stage 3 `python-builder` (`python:3.12-alpine`): create venv, `pip install -r requirements.txt`
-- [ ] Stage 4 runtime (`python:3.12-alpine`): copy from stages 1–3 and backend source, set `RESTIC_CACHE_DIR=/app/data/restic-cache`, entrypoint runs `alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 12345`
-- [ ] Confirm `docker build --build-arg RESTIC_ARCH=arm64 -t backup-server .` succeeds (or `amd64`)
-- [ ] Confirm expected image size ~165–190 MB
-
-### 10.2 docker-compose (production)
-
-- [ ] Write `docker-compose.yml` at repo root (separate from `.devcontainer/docker-compose.yml`)
-- [ ] Expose port 12345
-- [ ] Mount `/sources/{label}:ro` for each source
-- [ ] Mount `/destinations/{label}:rw` for each destination
-- [ ] Mount `/app/data:rw` for SQLite + restic cache
-- [ ] Set `LOG_LEVEL`, `RESTIC_CACHE_DIR` environment variables
-- [ ] Document how to configure Traefik labels (basicAuth, TLS) in README
-
-### 10.3 End-to-end smoke test
-
-- [ ] Start the container locally with a real source directory and destination
-- [ ] Create a job via the UI, trigger a manual run
-- [ ] Confirm run completes with `status=success`
-- [ ] Confirm snapshot appears in the snapshots tab
-- [ ] Confirm ntfy notification is delivered (if configured)
-- [ ] Confirm `restic check` passes after a run with `check_enabled=True`
-
----
-
-## 11. Polish and Documentation
-
-- [ ] Write root `README.md`: what this is, docker-compose quick-start, env vars, Traefik config example, how to update restic version
-- [ ] Add `RESTIC_ARCH` to Dockerfile `ARG` with a sensible error if not set
-- [ ] Verify `ruff format . && ruff check --fix .` is clean
-- [ ] Verify `npm run build` (tsc + vite) has zero errors
-- [ ] Verify all 157 backend route-layer tests still pass after service layer is implemented
-- [ ] Verify all 74 backend service-layer tests pass after restic.py and backup_runner.py are implemented
-- [ ] Verify all frontend tests pass after all pages/components are implemented
-
----
-
-## 12. Logging Enhancements — Request Traceability
-
-### 12.1 Problem Statement
+### 10.1 Problem Statement
 
 Current logging implementation logs function names, inputs, outputs, and HTTP requests, but lacks **request ID correlation**. Without a unique request ID propagated through the entire call stack, it's impossible to trace all logs from a single user request as it flows through multiple async functions. This makes debugging production issues difficult.
 
 Example problem: If a user triggers a backup, you can see "POST /api/jobs/123/run → 202", but then you cannot correlate the restic, prune, check, and notification logs that happen asynchronously 5 minutes later.
 
-### 12.2 Solution Design
+### 10.2 Solution Design
 
 Use Python's `contextvars` module to generate and store a unique request ID (UUID4) for each HTTP request, then propagate it through the async context and include it in every log line.
 
-### 12.3 Implementation Tasks
+### 10.3 Implementation Tasks
 
-- [ ] **12.3.1 Add contextvars to logging.py**: Import `contextvars`, create a `ContextVar("request_id")` that stores the current request ID (default `None`); create a `get_request_id()` function that returns the current value
+- [ ] **10.3.1 Add contextvars to logging.py**: Import `contextvars`, create a `ContextVar("request_id")` that stores the current request ID (default `None`); create a `get_request_id()` function that returns the current value
 
-- [ ] **12.3.2 Modify RequestLoggingMiddleware**: Generate a unique request ID using `uuid.uuid4().hex[:12]` (12-char short form) on each HTTP request; set it in the context variable at the start of request processing; include it in the initial request log; ensure it persists through the async context
+- [ ] **10.3.2 Modify RequestLoggingMiddleware**: Generate a unique request ID using `uuid.uuid4().hex[:12]` (12-char short form) on each HTTP request; set it in the context variable at the start of request processing; include it in the initial request log; ensure it persists through the async context
 
-- [ ] **12.3.3 Update logging format**: Change `basicConfig` format string from `"%(asctime)s %(levelname)s %(name)s %(message)s"` to include request ID field: `"%(asctime)s [%(request_id)s] %(levelname)s %(name)s:%(funcName)s - %(message)s"` (or similar readable format)
+- [ ] **10.3.3 Update logging format**: Change `basicConfig` format string from `"%(asctime)s %(levelname)s %(name)s %(message)s"` to include request ID field: `"%(asctime)s [%(request_id)s] %(levelname)s %(name)s:%(funcName)s - %(message)s"` (or similar readable format)
 
-- [ ] **12.3.4 Implement LogRecord filter**: Create a custom `logging.Filter` subclass that injects the current request ID into every LogRecord via `record.request_id = get_request_id() or "none"`; register this filter on the root logger in `setup_logging()`
+- [ ] **10.3.4 Implement LogRecord filter**: Create a custom `logging.Filter` subclass that injects the current request ID into every LogRecord via `record.request_id = get_request_id() or "none"`; register this filter on the root logger in `setup_logging()`
 
-- [ ] **12.3.5 Update @log_call decorator**: Ensure the decorator logs correctly with the new format (no changes needed if the filter is working); verify in tests that request ID appears in log output
+- [ ] **10.3.5 Update @log_call decorator**: Ensure the decorator logs correctly with the new format (no changes needed if the filter is working); verify in tests that request ID appears in log output
 
-- [ ] **12.3.6 Test request traceability**: Write a test that:
+- [ ] **10.3.6 Test request traceability**: Write a test that:
   - Simulates an HTTP request to a route that triggers `backup_runner.run_backup()`
   - Captures all log output
   - Verifies that every log line (from RequestLoggingMiddleware, backup_runner, restic, notifications) contains the **same request ID**
   - Example assertion: `assert all(request_id in line for line in log_lines)`
 
-- [ ] **12.3.7 Document logging format**: Update CLAUDE.md section 2.1 to describe the new request ID traceability feature; include example log output showing a complete request flow with consistent request ID
+- [ ] **10.3.7 Document logging format**: Update CLAUDE.md section 2.1 to describe the new request ID traceability feature; include example log output showing a complete request flow with consistent request ID
 
-- [ ] **12.3.8 Verify existing tests still pass**: Run full test suite (`pytest`) to ensure LogRecord filter doesn't break any existing tests or log assertions
+- [ ] **10.3.8 Verify existing tests still pass**: Run full test suite (`pytest`) to ensure LogRecord filter doesn't break any existing tests or log assertions
 
-### 12.4 Expected Logging Output
+### 10.4 Expected Logging Output
 
 After implementation, a complete backup request flow should produce logs like:
 
@@ -553,13 +509,57 @@ After implementation, a complete backup request flow should produce logs like:
 
 All logs carry `abc1234567f8`, making the entire transaction traceable with: `grep "abc1234567f8" app.log`
 
-### 12.5 Non-functional Requirements
+### 10.5 Non-functional Requirements
 
 - Request ID must be **12 characters** (UUID4 hex substring) to keep logs compact
 - Request ID must be **immutable** once set for a given request — never change or regenerate
 - Context variable must be **cleaned up** or isolated between concurrent requests (asyncio + contextvars handles this automatically)
 - Format string must be **backward compatible** — adding request ID doesn't break parsing or tooling
 - Logging level and existing log messages must **not change** — only format changes
+
+---
+
+## 11. Infrastructure
+
+### 11.1 Dockerfile
+
+- [ ] Stage 1 `frontend-builder` (`node:22-alpine`): `npm ci`, `npm run build`, output `/frontend/dist/`
+- [ ] Stage 2 `restic-fetcher` (`alpine:3.21`): download restic binary, verify SHA256, decompress; accepts `RESTIC_VERSION` and `RESTIC_ARCH` build args; fail on unsupported arch
+- [ ] Stage 3 `python-builder` (`python:3.12-alpine`): create venv, `pip install -r requirements.txt`
+- [ ] Stage 4 runtime (`python:3.12-alpine`): copy from stages 1–3 and backend source, set `RESTIC_CACHE_DIR=/app/data/restic-cache`, entrypoint runs `alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 12345`
+- [ ] Confirm `docker build --build-arg RESTIC_ARCH=arm64 -t backup-server .` succeeds (or `amd64`)
+- [ ] Confirm expected image size ~165–190 MB
+
+### 11.2 docker-compose (production)
+
+- [ ] Write `docker-compose.yml` at repo root (separate from `.devcontainer/docker-compose.yml`)
+- [ ] Expose port 12345
+- [ ] Mount `/sources/{label}:ro` for each source
+- [ ] Mount `/destinations/{label}:rw` for each destination
+- [ ] Mount `/app/data:rw` for SQLite + restic cache
+- [ ] Set `LOG_LEVEL`, `RESTIC_CACHE_DIR` environment variables
+- [ ] Document how to configure Traefik labels (basicAuth, TLS) in README
+
+### 11.3 End-to-end smoke test
+
+- [ ] Start the container locally with a real source directory and destination
+- [ ] Create a job via the UI, trigger a manual run
+- [ ] Confirm run completes with `status=success`
+- [ ] Confirm snapshot appears in the snapshots tab
+- [ ] Confirm ntfy notification is delivered (if configured)
+- [ ] Confirm `restic check` passes after a run with `check_enabled=True`
+
+---
+
+## 12. Polish and Documentation
+
+- [ ] Write root `README.md`: what this is, docker-compose quick-start, env vars, Traefik config example, how to update restic version
+- [ ] Add `RESTIC_ARCH` to Dockerfile `ARG` with a sensible error if not set
+- [ ] Verify `ruff format . && ruff check --fix .` is clean
+- [ ] Verify `npm run build` (tsc + vite) has zero errors
+- [ ] Verify all 157 backend route-layer tests still pass after service layer is implemented
+- [ ] Verify all 74 backend service-layer tests pass after restic.py and backup_runner.py are implemented
+- [ ] Verify all frontend tests pass after all pages/components are implemented
 
 ---
 
