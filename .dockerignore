@@ -1,1 +1,52 @@
-# Excludes .git, node_modules, __pycache__, dist, tests, and .env files from Docker build context
+# Keep the docker build context small and reproducible.
+# Anything listed here is excluded from the COPY commands in the Dockerfile.
+
+# VCS
+.git/
+.gitignore
+.gitattributes
+
+# Dev tooling / IDE
+.devcontainer/
+.vscode/
+.idea/
+
+# Documentation that doesn't ship in the image
+*.md
+design_doc.md
+implementation_plan.md
+deployment.md
+CLAUDE.md
+
+# Node — node_modules are reinstalled via `npm ci` inside frontend-builder
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/screenshots/
+
+# Python
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/.pytest_cache/
+**/.ruff_cache/
+**/.mypy_cache/
+
+# Tests don't ship in the runtime image
+backend/tests/
+
+# Local SQLite databases (created at runtime in /app/data)
+**/*.db
+**/*.db-journal
+**/*.db-wal
+**/*.db-shm
+backend/backup.db
+
+# Secrets and local env files
+.env
+.env.*
+*.env
+
+# OS junk
+.DS_Store
+Thumbs.db

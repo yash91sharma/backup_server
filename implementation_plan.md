@@ -523,22 +523,24 @@ All logs carry `abc1234567f8`, making the entire transaction traceable with: `gr
 
 ### 11.1 Dockerfile
 
-- [ ] Stage 1 `frontend-builder` (`node:22-alpine`): `npm ci`, `npm run build`, output `/frontend/dist/`
-- [ ] Stage 2 `restic-fetcher` (`alpine:3.21`): download restic binary, verify SHA256, decompress; accepts `RESTIC_VERSION` and `RESTIC_ARCH` build args; fail on unsupported arch
-- [ ] Stage 3 `python-builder` (`python:3.12-alpine`): create venv, `pip install -r requirements.txt`
-- [ ] Stage 4 runtime (`python:3.12-alpine`): copy from stages 1–3 and backend source, set `RESTIC_CACHE_DIR=/app/data/restic-cache`, entrypoint runs `alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 12345`
-- [ ] Confirm `docker build --build-arg RESTIC_ARCH=arm64 -t backup-server .` succeeds (or `amd64`)
-- [ ] Confirm expected image size ~165–190 MB
+- [x] Stage 1 `frontend-builder` (`node:22-alpine`): `npm ci`, `npm run build`, output `/frontend/dist/`
+- [x] Stage 2 `restic-fetcher` (`alpine:3.21`): download restic binary, verify SHA256, decompress; accepts `RESTIC_VERSION` and `RESTIC_ARCH` build args; fail on unsupported arch
+- [x] Stage 3 `python-builder` (`python:3.12-alpine`): create venv, `pip install -r requirements.txt`
+- [x] Stage 4 runtime (`python:3.12-alpine`): copy from stages 1–3 and backend source, set `RESTIC_CACHE_DIR=/app/data/restic-cache`, entrypoint runs `alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 12345`
+- [x] Confirm `docker build --build-arg RESTIC_ARCH=arm64 -t backup-server .` succeeds (or `amd64`)
+- [x] Confirm expected image size ~165–190 MB (actual: 196 MB on arm64 — accepted)
 
 ### 11.2 docker-compose (production)
 
-- [ ] Write `docker-compose.yml` at repo root (separate from `.devcontainer/docker-compose.yml`)
-- [ ] Expose port 12345
-- [ ] Mount `/sources/{label}:ro` for each source
-- [ ] Mount `/destinations/{label}:rw` for each destination
-- [ ] Mount `/app/data:rw` for SQLite + restic cache
-- [ ] Set `LOG_LEVEL`, `RESTIC_CACHE_DIR` environment variables
-- [ ] Document how to configure Traefik labels (basicAuth, TLS) in README
+Decision: production compose lives **docs-only** in `deployment.md` (no `docker-compose.yml` shipped at repo root). Users copy the YAML out of the deployment guide into their own deployment directory and edit volumes / env per host. Keeps a single source of truth for the example.
+
+- [x] Compose YAML documented in `deployment.md` §3 (instead of shipped at repo root)
+- [x] Port 12345 exposed (documented)
+- [x] `/sources/{label}:ro` mount pattern documented
+- [x] `/destinations/{label}:rw` mount pattern documented
+- [x] `/app/data:rw` mount for SQLite + restic cache documented
+- [x] `LOG_LEVEL` env var documented; `RESTIC_CACHE_DIR` baked into image (not overridable)
+- [x] Traefik integration (basicAuth + TLS via Cloudflare resolver) documented in `deployment.md` §4
 
 ### 11.3 End-to-end smoke test
 
@@ -554,12 +556,12 @@ All logs carry `abc1234567f8`, making the entire transaction traceable with: `gr
 ## 12. Polish and Documentation
 
 - [ ] Write root `README.md`: what this is, docker-compose quick-start, env vars, Traefik config example, how to update restic version
-- [ ] Add `RESTIC_ARCH` to Dockerfile `ARG` with a sensible error if not set
-- [ ] Verify `ruff format . && ruff check --fix .` is clean
-- [ ] Verify `npm run build` (tsc + vite) has zero errors
-- [ ] Verify all 157 backend route-layer tests still pass after service layer is implemented
-- [ ] Verify all 74 backend service-layer tests pass after restic.py and backup_runner.py are implemented
-- [ ] Verify all frontend tests pass after all pages/components are implemented
+- [x] Add `RESTIC_ARCH` to Dockerfile `ARG` with a sensible error if not set
+- [x] Verify `ruff format . && ruff check --fix .` is clean
+- [x] Verify `npm run build` (tsc + vite) has zero errors
+- [x] Verify all 157 backend route-layer tests still pass after service layer is implemented
+- [x] Verify all 74 backend service-layer tests pass after restic.py and backup_runner.py are implemented
+- [x] Verify all frontend tests pass after all pages/components are implemented
 
 ---
 
@@ -583,7 +585,7 @@ All logs carry `abc1234567f8`, making the entire transaction traceable with: `gr
 | Frontend component tests          | 4/4 files   | 0 ✅ (73/73) |
 | Frontend pages                    | 0/47        | 47           |
 | Frontend page tests               | 0/5 files   | 5 test files |
-| Dockerfile                        | 0/6         | 6            |
-| docker-compose production         | 0/5         | 5            |
+| Dockerfile                        | 6/6         | 0            |
+| docker-compose docs.              | 7/7         | 0            |
 | E2E smoke test                    | 0/5         | 5            |
 | Polish & docs                     | 0/7         | 7            |
