@@ -14,6 +14,7 @@ import functools
 import inspect
 import logging
 import os
+import time
 import uuid
 from typing import (
     Awaitable,
@@ -36,6 +37,18 @@ F = TypeVar("F", bound=Callable[..., object])
 
 # Fields whose values are replaced with "***" in any logged mapping.
 SENSITIVE_FIELDS: Set[str] = {"restic_password", "ntfy_token"}
+
+# Maximum repr length for logged return values; protects logs from being
+# flooded by large restic stdout blobs and similar.
+_MAX_RETURN_REPR_LEN: int = 500
+
+
+def _truncate_repr(value: object) -> str:
+    s = repr(value)
+    if len(s) > _MAX_RETURN_REPR_LEN:
+        return s[:_MAX_RETURN_REPR_LEN] + "...<truncated>"
+    return s
+
 
 # Per-request ID populated by RequestLoggingMiddleware; readable anywhere in
 # the async call stack via get_request_id().
@@ -89,8 +102,8 @@ def sanitize(data: object) -> object:
         return sanitized_list
     if isinstance(data, tuple):
         tuple_data: Tuple[object, ...] = cast(Tuple[object, ...], data)
-        sanitized_list: List[object] = [sanitize(item) for item in tuple_data]
-        sanitized_tuple: Tuple[object, ...] = tuple(sanitized_list)
+        sanitized_tuple_items: List[object] = [sanitize(item) for item in tuple_data]
+        sanitized_tuple: Tuple[object, ...] = tuple(sanitized_tuple_items)
         return sanitized_tuple
     return data
 
@@ -123,7 +136,9 @@ def log_call(fn: F) -> F:
             try:
                 result: object = fn(*args, **kwargs)
                 sanitized_result: object = sanitize(result)
-                logger.debug("%s returned %s", fn.__name__, sanitized_result)
+                logger.debug(
+                    "%s returned %s", fn.__name__, _truncate_repr(sanitized_result)
+                )
                 return result
             except Exception as exc:
                 logger.exception("%s raised %s", fn.__name__, exc)
@@ -141,7 +156,9 @@ def log_call(fn: F) -> F:
         try:
             result: object = await fn(*args, **kwargs)
             sanitized_result: object = sanitize(result)
-            logger.debug("%s returned %s", fn.__name__, sanitized_result)
+            logger.debug(
+                "%s returned %s", fn.__name__, _truncate_repr(sanitized_result)
+            )
             return result
         except Exception as exc:
             logger.exception("%s raised %s", fn.__name__, exc)
@@ -207,11 +224,18 @@ def setup_logging() -> None:
 
 
 class RequestLoggingMiddleware(BaseHTTPMiddleware):
-    """Log every HTTP request with method, path, and response status.
+    """Log every HTTP request with method, path, response status, and duration.
 
     Generates a 12-character hex request ID per request, stores it in the
     ``_request_id_var`` ContextVar so every log line emitted while handling
     the request carries the same ID, and clears the ContextVar on exit.
+
+    Emits two log lines per request (per design doc §16):
+    - entry: ``→ METHOD /path``
+    - exit:  ``← METHOD /path status=<code> duration_ms=<ms>``
+
+    Request bodies are not logged here; the ``@log_call`` decorator on each
+    route handler already logs the sanitized Pydantic body parameter.
     """
 
     async def dispatch(
@@ -219,11 +243,20 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
     ) -> Response:
         request_id: str = uuid.uuid4().hex[:12]
         token = _request_id_var.set(request_id)
+        logger: logging.Logger = get_logger(__name__)
+        method: str = request.method
+        path: str = request.url.path
+        start: float = time.perf_counter()
+        logger.info("→ %s %s", method, path)
         try:
             response: Response = await call_next(request)
-            logger: logging.Logger = get_logger(__name__)
+            duration_ms: int = int((time.perf_counter() - start) * 1000)
             logger.info(
-                "%s %s → %s", request.method, request.url.path, response.status_code
+                "← %s %s status=%d duration_ms=%d",
+                method,
+                path,
+                response.status_code,
+                duration_ms,
             )
             return response
         finally:

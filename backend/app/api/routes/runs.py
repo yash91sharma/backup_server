@@ -25,7 +25,7 @@ router = APIRouter(prefix="/runs", tags=["runs"])
 async def recent_runs(
     limit: int = Query(10, ge=1, le=100),
     session: AsyncSession = Depends(get_session),
-):
+) -> List[RunSummarySchema]:
     """Return the most recent runs across all jobs, newest first.
 
     Each entry includes job_name (joined from BackupJob).
@@ -39,7 +39,7 @@ async def recent_runs(
     )
     rows = result.all()
 
-    response = []
+    response: list[RunSummarySchema] = []
     for run, job_name in rows:
         data = RunSummarySchema.model_validate(run)
         data.job_name = job_name
@@ -53,7 +53,9 @@ async def recent_runs(
 
 @router.get("/{run_id}", response_model=RunDetailSchema)
 @log_call
-async def get_run(run_id: str, session: AsyncSession = Depends(get_session)):
+async def get_run(
+    run_id: str, session: AsyncSession = Depends(get_session)
+) -> BackupRun:
     """Return a single run record with all output fields included."""
     run = await session.get(BackupRun, run_id)
     if run is None:

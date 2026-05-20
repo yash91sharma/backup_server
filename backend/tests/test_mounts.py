@@ -234,7 +234,7 @@ async def test_rename_destination_active_run_returns_409(client, tmp_path):
 
     job = await _create_job(client, "docs", "oldlabel")
     job_uuid = uuid.UUID(job["id"])
-    backup_runner._active_jobs.add(job_uuid)
+    backup_runner.active_jobs.add(job_uuid)
 
     try:
         with patch("app.api.routes.mounts.DESTINATIONS_ROOT", str(dests)):
@@ -248,7 +248,7 @@ async def test_rename_destination_active_run_returns_409(client, tmp_path):
         assert resp.status_code == 409
         assert "in progress" in resp.json()["detail"].lower()
     finally:
-        backup_runner._active_jobs.discard(job_uuid)
+        backup_runner.active_jobs.discard(job_uuid)
 
 
 async def test_rename_does_not_require_old_label_mounted(client, tmp_path):

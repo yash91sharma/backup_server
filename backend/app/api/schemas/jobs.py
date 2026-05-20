@@ -2,7 +2,7 @@
 
 import re
 from datetime import datetime
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from apscheduler.triggers.cron import CronTrigger
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -44,8 +44,10 @@ def _validate_schedule_value(schedule_type: ScheduleType, schedule_value: str) -
             raise ValueError(f"Minimum interval is {_MIN_INTERVAL_MINUTES} minutes")
 
     elif schedule_type == ScheduleType.cron:
+        # apscheduler lacks type stubs; trigger and its methods are Any here.
+        cron: Any = CronTrigger
         try:
-            trigger = CronTrigger.from_crontab(schedule_value)
+            trigger: Any = cron.from_crontab(schedule_value)
         except Exception:
             raise ValueError(f"Invalid cron expression: {schedule_value!r}")
 
@@ -54,11 +56,11 @@ def _validate_schedule_value(schedule_type: ScheduleType, schedule_value: str) -
         from datetime import timezone
 
         now = datetime.now(timezone.utc)
-        t1 = trigger.get_next_fire_time(None, now)
+        t1: datetime | None = trigger.get_next_fire_time(None, now)
         if t1 is not None:
-            t2 = trigger.get_next_fire_time(t1, t1)
+            t2: datetime | None = trigger.get_next_fire_time(t1, t1)
             if t2 is not None:
-                gap = (t2 - t1).total_seconds()
+                gap: float = (t2 - t1).total_seconds()
                 if gap < _MIN_CRON_INTERVAL_SECONDS:
                     raise ValueError(
                         "Cron schedule fires more than once per hour; "

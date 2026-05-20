@@ -60,14 +60,14 @@ def test_request_id_filter_injects_value_from_contextvar():
     f = RequestIdFilter()
     record = _make_record()
     assert f.filter(record) is True
-    assert record.request_id == "xyz789012abc"
+    assert getattr(record, "request_id") == "xyz789012abc"
 
 
 def test_request_id_filter_defaults_to_none_string_when_unset():
     f = RequestIdFilter()
     record = _make_record()
     assert f.filter(record) is True
-    assert record.request_id == "none"
+    assert getattr(record, "request_id") == "none"
 
 
 # ── setup_logging format and propagation ─────────────────────────────────────
@@ -195,6 +195,80 @@ async def test_two_sequential_requests_have_isolated_request_ids(caplog):
     logged_rids = {getattr(r, "request_id", None) for r in caplog.records}
     assert rids[0] in logged_rids
     assert rids[1] in logged_rids
+
+
+# ── @log_call return value truncation ────────────────────────────────────────
+
+
+def test_log_call_truncates_long_return_values(caplog):
+    """Per design doc §16: return values must be truncated at 500 chars."""
+    from app.core.logging import log_call
+
+    @log_call
+    def big_return() -> str:
+        return "X" * 5000
+
+    setup_logging()
+    with caplog.at_level(logging.DEBUG):
+        big_return()
+    returned_lines = [r for r in caplog.records if "returned" in r.getMessage()]
+    assert returned_lines
+    msg = returned_lines[0].getMessage()
+    # truncated representation should contain ellipsis or be at most a bounded size
+    assert "..." in msg or len(msg) < 1000
+
+
+# ── RequestLoggingMiddleware entry/exit + duration ───────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_middleware_logs_request_entry_and_exit_with_duration(caplog):
+    """Per design doc §16: middleware emits both an entry line and an exit
+    line with duration_ms."""
+    setup_logging()
+    app, _ = _make_app()
+    with caplog.at_level(logging.INFO):
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as ac:
+            await ac.get("/")
+
+    middleware_msgs = [
+        r.getMessage() for r in caplog.records if r.name == "app.core.logging"
+    ]
+    # one entry line, one exit line
+    entry = [m for m in middleware_msgs if "→" in m and "duration_ms" not in m]
+    exit_ = [m for m in middleware_msgs if "duration_ms" in m]
+    assert entry, f"missing request entry log; got: {middleware_msgs}"
+    assert exit_, f"missing response exit log with duration_ms; got: {middleware_msgs}"
+
+
+@pytest.mark.asyncio
+async def test_middleware_does_not_log_sensitive_request_fields(caplog):
+    """Per design doc §16: request bodies must be sanitized."""
+    from starlette.requests import Request
+    from starlette.responses import JSONResponse
+    from starlette.routing import Route
+
+    async def echo(request: Request):
+        return JSONResponse({"ok": True})
+
+    app = Starlette(routes=[Route("/echo", echo, methods=["POST"])])
+    app.add_middleware(RequestLoggingMiddleware)
+
+    setup_logging()
+    with caplog.at_level(logging.INFO):
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as ac:
+            await ac.post(
+                "/echo", json={"restic_password": "s3cret", "name": "doc-job"}
+            )
+
+    middleware_msgs = " ".join(
+        r.getMessage() for r in caplog.records if r.name == "app.core.logging"
+    )
+    assert "s3cret" not in middleware_msgs
 
 
 # ── Full-stack traceability via FastAPI ──────────────────────────────────────

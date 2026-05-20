@@ -41,7 +41,7 @@ async def _get_or_create_settings(session: AsyncSession) -> AppSettings:
 
 
 @log_call
-def _settings_response(settings: AppSettings) -> dict:
+def _settings_response(settings: AppSettings) -> dict[str, object]:
     """Build a SettingsResponse dict with ntfy_token always set to None."""
     return {
         "id": settings.id,
@@ -62,7 +62,9 @@ def _settings_response(settings: AppSettings) -> dict:
 
 @router.get("/settings", response_model=SettingsResponse)
 @log_call
-async def get_settings(session: AsyncSession = Depends(get_session)):
+async def get_settings(
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, object]:
     """Return the current AppSettings, creating the singleton row if needed."""
     settings = await _get_or_create_settings(session)
     return _settings_response(settings)
@@ -76,7 +78,7 @@ async def get_settings(session: AsyncSession = Depends(get_session)):
 async def update_settings(
     body: SettingsUpdate,
     session: AsyncSession = Depends(get_session),
-):
+) -> dict[str, object]:
     """Upsert AppSettings.  ntfy_token is accepted but never returned."""
     settings = await _get_or_create_settings(session)
 
@@ -105,7 +107,7 @@ async def update_settings(
 
 @router.post("/settings/test-ntfy", response_model=NtfyTestResult)
 @log_call
-async def test_ntfy(session: AsyncSession = Depends(get_session)):
+async def test_ntfy(session: AsyncSession = Depends(get_session)) -> NtfyTestResult:
     """Send a test notification via ntfy.
 
     Returns 422 if no topic is configured.  Any network error is returned as
@@ -122,7 +124,7 @@ async def test_ntfy(session: AsyncSession = Depends(get_session)):
         )
 
     url = f"{settings.ntfy_server_url}/{settings.ntfy_topic}"
-    headers = {}
+    headers: dict[str, str] = {}
     if settings.ntfy_token:
         headers["Authorization"] = f"Bearer {settings.ntfy_token}"
 
@@ -157,7 +159,9 @@ async def test_ntfy(session: AsyncSession = Depends(get_session)):
 
 @router.get("/settings/restic-update-check", response_model=ResticUpdateCheck)
 @log_call
-async def restic_update_check(session: AsyncSession = Depends(get_session)):
+async def restic_update_check(
+    session: AsyncSession = Depends(get_session),
+) -> ResticUpdateCheck:
     """Compare the installed restic version against the latest GitHub release.
 
     Network failures return latest=None, update_available=None instead of an
@@ -197,7 +201,7 @@ async def restic_update_check(session: AsyncSession = Depends(get_session)):
 
 @router.get("/health", response_model=HealthResponse)
 @log_call
-async def health(session: AsyncSession = Depends(get_session)):
+async def health(session: AsyncSession = Depends(get_session)) -> HealthResponse:
     """Return scheduler state, restic version, and DB liveness.
 
     Always returns HTTP 200 — individual fields signal any degradation.

@@ -46,7 +46,7 @@ def _list_dirs(root: str) -> List[str]:
 
 @router.get("/sources", response_model=List[str])
 @log_call
-async def list_sources():
+async def list_sources() -> List[str]:
     """Return directory names found directly under SOURCES_ROOT."""
     return _list_dirs(SOURCES_ROOT)
 
@@ -56,7 +56,7 @@ async def list_sources():
 
 @router.get("/sources/{label}/subdirs", response_model=List[str])
 @log_call
-async def list_source_subdirs(label: str):
+async def list_source_subdirs(label: str) -> List[str]:
     """Return immediate subdirectory names within a specific source mount.
 
     Returns 404 if the source mount directory does not exist.
@@ -72,7 +72,7 @@ async def list_source_subdirs(label: str):
 
 @router.get("/destinations", response_model=List[str])
 @log_call
-async def list_destinations():
+async def list_destinations() -> List[str]:
     """Return directory names found directly under DESTINATIONS_ROOT."""
     return _list_dirs(DESTINATIONS_ROOT)
 
@@ -85,7 +85,7 @@ async def list_destinations():
 async def rename_destination(
     body: RenameDestinationRequest,
     session: AsyncSession = Depends(get_session),
-):
+) -> RenameDestinationResult:
     """Rename a destination label in all BackupJob rows.
 
     The new destination directory must already be mounted.  No jobs using the
@@ -115,7 +115,7 @@ async def rename_destination(
 
     # Reject the rename if any of those jobs are currently running.
     active_job_ids = {uuid.UUID(j.id) for j in jobs}
-    if active_job_ids & backup_runner._active_jobs:
+    if active_job_ids & backup_runner.active_jobs:
         raise HTTPException(
             status_code=409,
             detail="A backup run is in progress for one or more affected jobs",

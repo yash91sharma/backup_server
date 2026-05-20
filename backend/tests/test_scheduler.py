@@ -95,6 +95,7 @@ async def test_startup_seed_is_noop_if_settings_exist(engine):
     factory = async_sessionmaker(engine, expire_on_commit=False)
     async with factory() as s:
         settings = await s.get(AppSettings, 1)
+    assert settings is not None
     assert settings.ntfy_topic == "existing-topic"
 
 
@@ -120,6 +121,7 @@ async def test_startup_detects_restic_version(engine):
     factory = async_sessionmaker(engine, expire_on_commit=False)
     async with factory() as s:
         settings = await s.get(AppSettings, 1)
+    assert settings is not None
     assert settings.restic_version == "0.17.3"
 
 
@@ -142,6 +144,7 @@ async def test_startup_handles_restic_not_found(engine):
     factory = async_sessionmaker(engine, expire_on_commit=False)
     async with factory() as s:
         settings = await s.get(AppSettings, 1)
+    assert settings is not None
     assert settings.restic_version is None
 
 
@@ -181,10 +184,11 @@ async def test_startup_stale_cleanup_running_rows(engine):
 
     async with factory() as s:
         run = await s.get(BackupRun, run_id)
+    assert run is not None
     assert run.status == RunStatus.failed
-    assert run.reason.value == "container_restart"
-    assert run.prune_status.value == "skipped"
-    assert run.check_status.value == "skipped"
+    assert run.reason is not None and run.reason.value == "container_restart"
+    assert run.prune_status is not None and run.prune_status.value == "skipped"
+    assert run.check_status is not None and run.check_status.value == "skipped"
 
 
 async def test_startup_stale_cleanup_null_check_status_rows(engine):
@@ -222,7 +226,8 @@ async def test_startup_stale_cleanup_null_check_status_rows(engine):
 
     async with factory() as s:
         run = await s.get(BackupRun, run_id)
-    assert run.check_status.value == "skipped"
+    assert run is not None
+    assert run.check_status is not None and run.check_status.value == "skipped"
 
 
 # ── Startup: job registration ─────────────────────────────────────────────────

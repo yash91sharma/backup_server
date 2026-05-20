@@ -156,6 +156,47 @@ async def test_create_job_duplicate_source_destination(client):
     assert resp2.status_code == 409
 
 
+async def test_create_job_same_labels_different_subpaths_allowed(client):
+    """Per design doc §6: duplicate key is (source_label, source_subpath,
+    destination_label). Different subpaths → different jobs."""
+    with patch("os.path.isdir", return_value=True):
+        resp1 = await client.post(
+            "/api/jobs", json=make_job_payload(source_subpath="photos")
+        )
+        assert resp1.status_code == 201
+        resp2 = await client.post(
+            "/api/jobs", json=make_job_payload(source_subpath="videos")
+        )
+    assert resp2.status_code == 201
+
+
+async def test_create_job_duplicate_same_subpath_rejected(client):
+    with patch("os.path.isdir", return_value=True):
+        resp1 = await client.post(
+            "/api/jobs", json=make_job_payload(source_subpath="photos")
+        )
+        assert resp1.status_code == 201
+        resp2 = await client.post(
+            "/api/jobs", json=make_job_payload(source_subpath="photos")
+        )
+    assert resp2.status_code == 409
+
+
+async def test_create_job_409_response_includes_conflicting_job_identity(client):
+    """Per design doc §6: 409 conflict returns the existing job's name and id."""
+    with patch("os.path.isdir", return_value=True):
+        first = await client.post("/api/jobs", json=make_job_payload(name="Original"))
+        assert first.status_code == 201
+        first_id = first.json()["id"]
+        resp = await client.post("/api/jobs", json=make_job_payload(name="Duplicate"))
+    assert resp.status_code == 409
+    body = resp.json()
+    # detail is a dict with conflict info
+    assert isinstance(body["detail"], dict)
+    assert body["detail"]["conflicting_job_id"] == first_id
+    assert body["detail"]["conflicting_job_name"] == "Original"
+
+
 async def test_create_job_retain_keep_last_valid(client):
     payload = make_job_payload(retain_keep_last=7)
     with patch("os.path.isdir", return_value=True):
@@ -385,13 +426,13 @@ async def test_delete_job_active_run_returns_409(client):
         created = (await client.post("/api/jobs", json=make_job_payload())).json()
 
     job_uuid = uuid.UUID(created["id"])
-    backup_runner._active_jobs.add(job_uuid)
+    backup_runner.active_jobs.add(job_uuid)
     try:
         resp = await client.delete(f"/api/jobs/{created['id']}")
         assert resp.status_code == 409
         assert "in progress" in resp.json()["detail"].lower()
     finally:
-        backup_runner._active_jobs.discard(job_uuid)
+        backup_runner.active_jobs.discard(job_uuid)
 
 
 async def test_delete_job_does_not_delete_restic_repo(client, tmp_path):
@@ -441,7 +482,7 @@ async def test_trigger_run_overlapping_returns_skipped(client):
         created = (await client.post("/api/jobs", json=make_job_payload())).json()
 
     job_uuid = uuid.UUID(created["id"])
-    backup_runner._active_jobs.add(job_uuid)
+    backup_runner.active_jobs.add(job_uuid)
     try:
         with patch("app.services.backup_runner.run_backup"):
             resp = await client.post(f"/api/jobs/{created['id']}/run")
@@ -451,7 +492,7 @@ async def test_trigger_run_overlapping_returns_skipped(client):
         # The returned run_id should be a skipped row
         assert run_id is not None
     finally:
-        backup_runner._active_jobs.discard(job_uuid)
+        backup_runner.active_jobs.discard(job_uuid)
 
 
 async def test_trigger_run_not_found(client):
@@ -540,13 +581,13 @@ async def test_unlock_job_active_run_returns_409(client):
         created = (await client.post("/api/jobs", json=make_job_payload())).json()
 
     job_uuid = uuid.UUID(created["id"])
-    backup_runner._active_jobs.add(job_uuid)
+    backup_runner.active_jobs.add(job_uuid)
     try:
         resp = await client.post(f"/api/jobs/{created['id']}/unlock")
         assert resp.status_code == 409
         assert "in progress" in resp.json()["detail"].lower()
     finally:
-        backup_runner._active_jobs.discard(job_uuid)
+        backup_runner.active_jobs.discard(job_uuid)
 
 
 async def test_unlock_not_found(client):

@@ -9,7 +9,7 @@ tests can patch them via 'app.core.scheduler.<name>'.
 
 import re
 import uuid
-from typing import Union
+from typing import Any, Union
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -50,7 +50,9 @@ def build_trigger(
     Cron format: standard crontab expression passed to CronTrigger.from_crontab.
     """
     if schedule_type == "cron":
-        return CronTrigger.from_crontab(schedule_value)
+        cron: Any = CronTrigger
+        cron_trigger: CronTrigger = cron.from_crontab(schedule_value)
+        return cron_trigger
     if schedule_type == "interval":
         m = _INTERVAL_RE.match(schedule_value)
         if not m:
@@ -98,30 +100,30 @@ async def start_scheduler() -> None:
         settings.restic_version = version
 
         # ── 3. Clean up stale 'running' rows ─────────────────────────────────
-        result = await session.execute(
+        stale_running = await session.execute(
             select(BackupRun).where(BackupRun.status == RunStatus.running)
         )
-        for run in result.scalars().all():
+        for run in stale_running.scalars().all():
             run.status = RunStatus.failed
             run.reason = RunReason.container_restart
             run.prune_status = PruneStatus.skipped
             run.check_status = CheckStatus.skipped
 
         # ── 4. Clean up rows with null check_status ───────────────────────────
-        result = await session.execute(
+        null_check = await session.execute(
             select(BackupRun).where(
                 BackupRun.status.in_([RunStatus.success, RunStatus.failed]),
                 BackupRun.check_status.is_(None),
             )
         )
-        for run in result.scalars().all():
+        for run in null_check.scalars().all():
             run.check_status = CheckStatus.skipped
 
         # ── 5. Register enabled jobs ──────────────────────────────────────────
-        result = await session.execute(
+        enabled_jobs = await session.execute(
             select(BackupJob).where(BackupJob.enabled == True)  # noqa: E712
         )
-        jobs = result.scalars().all()
+        jobs = enabled_jobs.scalars().all()
 
         await session.commit()
 
@@ -141,7 +143,9 @@ async def start_scheduler() -> None:
 def _register_job(job: BackupJob) -> None:
     """Add a single BackupJob to the scheduler."""
     trigger = build_trigger(job.schedule_type, job.schedule_value)
-    scheduler.add_job(
+    # apscheduler lacks type stubs; cast to Any at the boundary.
+    sched: Any = scheduler
+    sched.add_job(
         run_backup,
         trigger=trigger,
         args=[uuid.UUID(job.id)],

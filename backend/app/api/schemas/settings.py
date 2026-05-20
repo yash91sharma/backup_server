@@ -40,15 +40,26 @@ class SettingsUpdate(BaseModel):
         return v
 
 
-class SettingsResponse(SettingsUpdate):
+class SettingsResponse(BaseModel):
     """Full settings record returned by GET/PUT /api/settings.
 
-    ntfy_token is always returned as None — it is stored but never exposed.
+    Mirrors ``SettingsUpdate`` fields plus computed/server-owned ones, with
+    one deliberate difference: ``ntfy_token`` is always ``None`` (the value
+    is stored but never exposed back to the client). Defined separately
+    rather than inheriting from ``SettingsUpdate`` so the token-narrowing is
+    a real type, not an LSP override.
     """
 
     id: int
+    ntfy_server_url: str
+    ntfy_topic: str
+    ntfy_token: None = None
+    notify_on_start: bool
+    notify_on_success: bool
+    notify_on_failure: bool
+    notify_on_verification: bool
+    default_job_timeout_hours: int
     restic_version: Optional[str] = None
-    ntfy_token: None = None  # type: ignore[assignment]
 
 
 class HealthResponse(BaseModel):

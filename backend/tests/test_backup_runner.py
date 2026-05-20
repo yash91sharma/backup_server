@@ -8,7 +8,8 @@ from unittest.mock import patch
 
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
-from app.services.backup_runner import _active_jobs, run_backup
+from app.db.models import CheckStatus, PruneStatus
+from app.services.backup_runner import active_jobs, run_backup
 
 REPO = "/destinations/main"
 JOB_ID = uuid.uuid4()
@@ -67,7 +68,9 @@ async def _get_run(engine, run_id: str):
 
     factory = async_sessionmaker(engine, expire_on_commit=False)
     async with factory() as s:
-        return await s.get(BackupRun, run_id)
+        run = await s.get(BackupRun, run_id)
+        assert run is not None, f"BackupRun {run_id} not found"
+        return run
 
 
 # ── Step 2: validate password ─────────────────────────────────────────────────
@@ -204,8 +207,8 @@ async def test_step4_wrong_password_marks_failed(engine):
 
     run = await _get_run(engine, run_id)
     assert run.status == RunStatus.failed
-    assert run.prune_status.value == "skipped"
-    assert run.check_status.value == "skipped"
+    assert run.prune_status == PruneStatus.skipped
+    assert run.check_status == CheckStatus.skipped
 
 
 async def test_step4_init_failure_marks_failed(engine):
@@ -273,8 +276,8 @@ async def test_step5_backup_failure_marks_run_failed(engine):
     run = await _get_run(engine, run_id)
     assert run.status == RunStatus.failed
     assert run.error_output is not None
-    assert run.prune_status.value == "skipped"
-    assert run.check_status.value == "skipped"
+    assert run.prune_status == PruneStatus.skipped
+    assert run.check_status == CheckStatus.skipped
 
 
 async def test_step5_backup_timeout_marks_failed(engine):
@@ -458,7 +461,7 @@ async def test_step8_prune_failure_nonfatal(engine):
 
     run = await _get_run(engine, run_id)
     assert run.status == RunStatus.success
-    assert run.prune_status.value == "failed"
+    assert run.prune_status == PruneStatus.failed
     assert run.prune_error_output is not None
 
 
@@ -581,7 +584,7 @@ async def test_step10_check_status_skipped_when_check_disabled(engine):
         await run_backup(JOB_ID, uuid.UUID(run_id))
 
     run = await _get_run(engine, run_id)
-    assert run.check_status.value == "skipped"
+    assert run.check_status == CheckStatus.skipped
 
 
 # ── Step 12: integrity check ──────────────────────────────────────────────────
@@ -621,7 +624,7 @@ async def test_step12_check_passed(engine):
 
     run = await _get_run(engine, run_id)
     assert run.status == RunStatus.success
-    assert run.check_status.value == "passed"
+    assert run.check_status == CheckStatus.passed
 
 
 async def test_step12_check_failure_nonfatal(engine):
@@ -660,14 +663,14 @@ async def test_step12_check_failure_nonfatal(engine):
 
     run = await _get_run(engine, run_id)
     assert run.status == RunStatus.success
-    assert run.check_status.value == "failed"
+    assert run.check_status == CheckStatus.failed
     assert run.check_error_output is not None
 
 
 # ── Concurrent run guard ──────────────────────────────────────────────────────
 
 
-async def test_active_jobs_cleared_after_completion(engine):
+async def testactive_jobs_cleared_after_completion(engine):
     await _setup_job(engine)
     run_id = str(uuid.uuid4())
     factory = async_sessionmaker(engine, expire_on_commit=False)
@@ -696,10 +699,10 @@ async def test_active_jobs_cleared_after_completion(engine):
     ):
         await run_backup(JOB_ID, uuid.UUID(run_id))
 
-    assert JOB_ID not in _active_jobs
+    assert JOB_ID not in active_jobs
 
 
-async def test_active_jobs_cleared_after_failure(engine):
+async def testactive_jobs_cleared_after_failure(engine):
     await _setup_job(engine, restic_password="")
     run_id = str(uuid.uuid4())
     factory = async_sessionmaker(engine, expire_on_commit=False)
@@ -717,7 +720,7 @@ async def test_active_jobs_cleared_after_failure(engine):
         await s.commit()
 
     await run_backup(JOB_ID, uuid.UUID(run_id))
-    assert JOB_ID not in _active_jobs
+    assert JOB_ID not in active_jobs
 
 
 # ── Notification checks ───────────────────────────────────────────────────────
@@ -844,7 +847,7 @@ async def test_run_backup_without_run_id_creates_run_row(engine):
 async def test_run_backup_without_run_id_job_not_found_is_noop(engine):
     unknown_id = uuid.uuid4()
     await run_backup(unknown_id)
-    assert unknown_id not in _active_jobs
+    assert unknown_id not in active_jobs
 
 
 # ── Step 6: source path construction ─────────────────────────────────────────
@@ -1016,6 +1019,7 @@ async def test_notify_on_success_false_skips_success_notification(engine):
     factory = async_sessionmaker(engine, expire_on_commit=False)
     async with factory() as s:
         settings = await s.get(AppSettings, 1)
+        assert settings is not None
         settings.ntfy_topic = "alerts"
         settings.notify_on_success = False
         settings.notify_on_start = False
@@ -1062,6 +1066,7 @@ async def test_notify_on_failure_false_skips_failure_notification(engine):
     factory = async_sessionmaker(engine, expire_on_commit=False)
     async with factory() as s:
         settings = await s.get(AppSettings, 1)
+        assert settings is not None
         settings.ntfy_topic = "alerts"
         settings.notify_on_failure = False
         settings.notify_on_start = False

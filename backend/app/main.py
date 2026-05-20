@@ -8,6 +8,7 @@ Route registration order matters:
 
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import AsyncGenerator
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -22,7 +23,7 @@ from app.core.scheduler import shutdown_scheduler, start_scheduler
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Run startup tasks (logging, scheduler) then yield for the app lifetime."""
     setup_logging()
     logger = get_logger(__name__)
@@ -50,7 +51,9 @@ app.add_middleware(
 
 
 @app.exception_handler(RequestValidationError)
-async def validation_exception_handler(request: Request, exc: RequestValidationError):
+async def validation_exception_handler(
+    request: Request, exc: RequestValidationError
+) -> JSONResponse:
     """Flatten Pydantic v2 validation errors into a single human-readable string.
 
     FastAPI's default 422 response has detail as a list; tests expect a string
@@ -87,7 +90,7 @@ if _STATIC_DIR.is_dir():
 
 
 @app.get("/{full_path:path}", include_in_schema=False)
-async def spa_catch_all(full_path: str):
+async def spa_catch_all(full_path: str) -> Response:
     """Serve index.html for any path not matched by an API route.
 
     Enables client-side routing in the React SPA.
