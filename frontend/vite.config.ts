@@ -22,6 +22,9 @@ export default defineConfig({
     setupFiles: ['./src/test/setup.ts'],
     css: false,
     clearMocks: true,
+    // Screenshot tests require browser mode and are run via `npm run
+    // screenshots`; exclude them from the default jsdom-only suite.
+    exclude: ['node_modules/**', 'dist/**', 'src/screenshots/**'],
     pool: 'threads',
     poolOptions: {
       threads: {
