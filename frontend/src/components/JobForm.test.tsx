@@ -70,10 +70,60 @@ describe('JobForm', () => {
       expect(screen.getByLabelText(/enabled/i)).toBeChecked()
     })
 
-    it('shows source and destination dropdowns', () => {
-      render(<JobForm onSubmit={vi.fn()} />)
-      expect(screen.getByLabelText(/source/i)).toBeInTheDocument()
-      expect(screen.getByLabelText(/destination/i)).toBeInTheDocument()
+    it('shows source and destination as select elements', () => {
+      render(
+        <JobForm onSubmit={vi.fn()} sourceMounts={['meh1', 'meh2']} destinationMounts={['main']} />
+      )
+      const source = screen.getByLabelText(/source/i)
+      const dest = screen.getByLabelText(/destination/i)
+      expect(source.tagName).toBe('SELECT')
+      expect(dest.tagName).toBe('SELECT')
+    })
+
+    it('lists the source mounts as options', () => {
+      render(<JobForm onSubmit={vi.fn()} sourceMounts={['meh1', 'meh2']} destinationMounts={[]} />)
+      const source = screen.getByLabelText(/source/i) as HTMLSelectElement
+      const optionValues = Array.from(source.options).map((o) => o.value)
+      expect(optionValues).toContain('meh1')
+      expect(optionValues).toContain('meh2')
+    })
+
+    it('lists the destination mounts as options', () => {
+      render(
+        <JobForm onSubmit={vi.fn()} sourceMounts={[]} destinationMounts={['main', 'archive']} />
+      )
+      const dest = screen.getByLabelText(/destination/i) as HTMLSelectElement
+      const optionValues = Array.from(dest.options).map((o) => o.value)
+      expect(optionValues).toContain('main')
+      expect(optionValues).toContain('archive')
+    })
+
+    it('shows a placeholder option when no selection has been made', () => {
+      render(<JobForm onSubmit={vi.fn()} sourceMounts={['meh1']} destinationMounts={['main']} />)
+      const source = screen.getByLabelText(/source/i) as HTMLSelectElement
+      // First option should be a non-value placeholder so users must make an explicit choice.
+      expect(source.options[0].value).toBe('')
+    })
+
+    it('shows a helpful message when no mounts are configured', () => {
+      render(<JobForm onSubmit={vi.fn()} sourceMounts={[]} destinationMounts={[]} />)
+      // Render an inline empty hint somewhere near the source field so the user knows
+      // they need to mount a volume before they can create a job.
+      expect(screen.getAllByText(/no.*mount|configure.*mount/i).length).toBeGreaterThan(0)
+    })
+
+    it('includes selected source and destination in onSubmit payload', async () => {
+      const onSubmit = vi.fn()
+      const user = userEvent.setup()
+      render(
+        <JobForm onSubmit={onSubmit} sourceMounts={['meh1', 'meh2']} destinationMounts={['main']} />
+      )
+      await user.selectOptions(screen.getByLabelText(/source/i), 'meh2')
+      await user.selectOptions(screen.getByLabelText(/destination/i), 'main')
+      await user.click(screen.getByRole('button', { name: /save|create|submit/i }))
+      expect(onSubmit).toHaveBeenCalledWith(
+        expect.objectContaining({ source_label: 'meh2', destination_label: 'main' })
+      )
     })
 
     it('shows schedule input', () => {
@@ -140,15 +190,27 @@ describe('JobForm', () => {
   describe('source label change warning', () => {
     it('shows amber warning banner when source label is changed', async () => {
       const user = userEvent.setup()
-      render(<JobForm job={baseJob} onSubmit={vi.fn()} />)
-      const sourceInput = screen.getByLabelText(/source/i)
-      await user.clear(sourceInput)
-      await user.type(sourceInput, 'photos')
+      render(
+        <JobForm
+          job={baseJob}
+          onSubmit={vi.fn()}
+          sourceMounts={['documents', 'photos']}
+          destinationMounts={['main']}
+        />
+      )
+      await user.selectOptions(screen.getByLabelText(/source/i), 'photos')
       expect(screen.getByText(/changing.*source|redirect.*future backups/i)).toBeInTheDocument()
     })
 
     it('does not show warning banner initially', () => {
-      render(<JobForm job={baseJob} onSubmit={vi.fn()} />)
+      render(
+        <JobForm
+          job={baseJob}
+          onSubmit={vi.fn()}
+          sourceMounts={['documents', 'photos']}
+          destinationMounts={['main']}
+        />
+      )
       expect(screen.queryByText(/changing.*source/i)).not.toBeInTheDocument()
     })
   })

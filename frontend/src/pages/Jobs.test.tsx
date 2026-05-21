@@ -57,6 +57,8 @@ beforeEach(() => {
   vi.mocked(api.enableJob).mockResolvedValue({ id: 'job-1', enabled: true })
   vi.mocked(api.disableJob).mockResolvedValue({ id: 'job-1', enabled: false })
   vi.mocked(api.triggerRun).mockResolvedValue({ run_id: 'run-abc' })
+  vi.mocked(api.listSourceMounts).mockResolvedValue(['meh1', 'meh2'])
+  vi.mocked(api.listDestinationMounts).mockResolvedValue(['main'])
 })
 
 describe('Jobs', () => {
@@ -258,6 +260,26 @@ describe('Jobs', () => {
       await waitFor(() => screen.getByRole('button', { name: /create.*job|new.*job/i }))
       await user.click(screen.getByRole('button', { name: /create.*job|new.*job/i }))
       await waitFor(() => expect(screen.getByRole('form')).toBeInTheDocument())
+    })
+
+    it('populates source and destination dropdowns from the mounts API', async () => {
+      const user = userEvent.setup()
+      renderWithProviders(<Jobs />)
+      await waitFor(() => screen.getByRole('button', { name: /create.*job|new.*job/i }))
+      await user.click(screen.getByRole('button', { name: /create.*job|new.*job/i }))
+      await waitFor(() => expect(screen.getByRole('form')).toBeInTheDocument())
+
+      const source = screen.getByLabelText(/source/i) as HTMLSelectElement
+      const dest = screen.getByLabelText(/destination/i) as HTMLSelectElement
+      // beforeEach mocks: sources=['meh1','meh2'], destinations=['main']
+      await waitFor(() => {
+        expect(Array.from(source.options).map((o) => o.value)).toEqual(
+          expect.arrayContaining(['meh1', 'meh2'])
+        )
+        expect(Array.from(dest.options).map((o) => o.value)).toEqual(
+          expect.arrayContaining(['main'])
+        )
+      })
     })
   })
 

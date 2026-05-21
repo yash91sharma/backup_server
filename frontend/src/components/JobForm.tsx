@@ -7,16 +7,26 @@ export interface JobFormProps {
   onSubmit: (data: unknown) => void
   onCancel?: () => void
   conflictingJob?: { id: string; name: string }
+  /** Source mount labels (from /api/mounts/sources). Populates the Source dropdown. */
+  sourceMounts?: string[]
+  /** Destination mount labels (from /api/mounts/destinations). Populates the Destination dropdown. */
+  destinationMounts?: string[]
 }
 
-export default function JobForm({ job, onSubmit, conflictingJob }: JobFormProps) {
+export default function JobForm({
+  job,
+  onSubmit,
+  conflictingJob,
+  sourceMounts = [],
+  destinationMounts = [],
+}: JobFormProps) {
   const isEdit = !!job
   const passwordLocked = isEdit && !!job.has_successful_run
 
   // Basic fields
   const [name, setName] = useState(job?.name ?? '')
   const [sourceLabel, setSourceLabel] = useState(job?.source_label ?? '')
-  const [destinationLabel] = useState(job?.destination_label ?? '')
+  const [destinationLabel, setDestinationLabel] = useState(job?.destination_label ?? '')
   const [password, setPassword] = useState('')
   const [enabled, setEnabled] = useState(job?.enabled ?? true)
   const [schedule, setSchedule] = useState<ScheduleValue>({
@@ -145,27 +155,60 @@ export default function JobForm({ job, onSubmit, conflictingJob }: JobFormProps)
             <label htmlFor="source-label" className="block text-sm font-medium mb-1">
               Source
             </label>
-            <input
+            <select
               id="source-label"
-              type="text"
               value={sourceLabel}
               onChange={(e) => setSourceLabel(e.target.value)}
-              className="border rounded px-2 py-1 text-sm w-full"
-            />
+              className="border rounded px-2 py-1 text-sm w-full bg-background"
+            >
+              <option value="">Select a source…</option>
+              {/* Preserve the saved label even if it's no longer in the mounts list
+                  (e.g. the volume was unmounted) so the user can see what it was. */}
+              {sourceLabel && !sourceMounts.includes(sourceLabel) && (
+                <option value={sourceLabel}>{sourceLabel} (not currently mounted)</option>
+              )}
+              {sourceMounts.map((label) => (
+                <option key={label} value={label}>
+                  {label}
+                </option>
+              ))}
+            </select>
+            {sourceMounts.length === 0 && (
+              <p className="text-gray-500 text-xs mt-1">
+                No source mounts configured. Add a volume under <code>/sources/&lt;label&gt;</code>{' '}
+                in your docker compose.
+              </p>
+            )}
           </div>
 
           <div>
             <label htmlFor="destination-label" className="block text-sm font-medium mb-1">
               Destination
             </label>
-            <input
+            <select
               id="destination-label"
-              type="text"
               value={destinationLabel}
+              onChange={(e) => setDestinationLabel(e.target.value)}
               disabled={isEdit}
-              readOnly={!isEdit}
-              className="border rounded px-2 py-1 text-sm w-full"
-            />
+              className="border rounded px-2 py-1 text-sm w-full bg-background disabled:opacity-60"
+            >
+              <option value="">Select a destination…</option>
+              {/* Same fallback as Source: preserve the saved label if it disappeared from mounts. */}
+              {destinationLabel && !destinationMounts.includes(destinationLabel) && (
+                <option value={destinationLabel}>{destinationLabel} (not currently mounted)</option>
+              )}
+              {destinationMounts.map((label) => (
+                <option key={label} value={label}>
+                  {label}
+                </option>
+              ))}
+            </select>
+            {!isEdit && destinationMounts.length === 0 && (
+              <p className="text-gray-500 text-xs mt-1">
+                No destination mounts configured. Add a volume under{' '}
+                <code>/destinations/&lt;label&gt;</code> in your docker compose.
+              </p>
+            )}
             {isEdit && (
               <>
                 <p className="text-gray-500 text-xs mt-1">This cannot be changed after creation.</p>

@@ -41,7 +41,10 @@ Adjust the `volumes` block for actual sources and destinations —
 **every backup source must be mounted under `/sources/<label>` read-only**
 and **every backup destination must be mounted under `/destinations/<label>`
 read-write**. The `<label>` you use here is what shows up in the UI's
-mount picker. I use Traefik for reverse-proxy, change if needed.
+**Source** and **Destination** dropdowns on the "Create Job" form —
+these are populated by scanning those two directories at request time,
+so any volume you add is immediately selectable without a restart of
+the container. I use Traefik for reverse-proxy, change if needed.
 
 ```yaml
 services:
@@ -115,4 +118,4 @@ mounted to `/destinations/<label>`. To make config + history survive a
 catastrophic host loss, periodically copy `data/backup.db` (along with
 `data/restic-cache/` if you want to skip rebuilding it) to an off-host
 location. It might be a good idea to turn down the container before
-copying this file. 
+copying this file.

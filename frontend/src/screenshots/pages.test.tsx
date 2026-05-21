@@ -6,6 +6,7 @@
  * to land, then takes a screenshot to ../../screenshots/pages/.
  */
 import { waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { page } from '@vitest/browser/context'
 import { Route, Routes } from 'react-router-dom'
 import { afterEach, beforeEach, test, vi } from 'vitest'
@@ -153,6 +154,7 @@ beforeEach(() => {
     latest: '0.17.3',
     update_available: false,
   })
+  vi.mocked(api.listSourceMounts).mockResolvedValue(['documents', 'photos'])
   vi.mocked(api.listDestinationMounts).mockResolvedValue(['main', 'archive'])
 })
 
@@ -207,6 +209,35 @@ test('Jobs - populated', async () => {
     }
   })
   await page.screenshot({ path: `${OUT}/Jobs.png` })
+})
+
+test('Jobs - create form open', async () => {
+  // Open the create form, then screenshot so the populated source/destination
+  // dropdowns are visible.
+  const result = renderPage('/jobs', <Jobs />)
+  cleanup = result.unmount
+  const user = userEvent.setup()
+  // The button label varies ("Create Job" / "New Job"); find it by visible text.
+  await waitFor(() => {
+    if (
+      !Array.from(result.container.querySelectorAll('button')).some((b) =>
+        /create.*job|new.*job/i.test(b.textContent ?? '')
+      )
+    ) {
+      throw new Error('create-job button not found')
+    }
+  })
+  const target = Array.from(result.container.querySelectorAll('button')).find((b) =>
+    /create.*job|new.*job/i.test(b.textContent ?? '')
+  )!
+  await user.click(target)
+  await waitFor(() => {
+    const src = result.container.querySelector('#source-label') as HTMLSelectElement | null
+    if (!src || src.options.length < 2) {
+      throw new Error('source dropdown not populated yet')
+    }
+  })
+  await page.screenshot({ path: `${OUT}/Jobs--create-form.png` })
 })
 
 test('JobDetail - populated', async () => {

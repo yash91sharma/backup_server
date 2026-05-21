@@ -23,6 +23,18 @@ export default function Jobs() {
     refetchOnWindowFocus: true,
   })
 
+  // Mounts populate the Source/Destination dropdowns in the create form.
+  // Fetched here (rather than inside JobForm) so the form stays a pure
+  // presentation component and stays easy to test in isolation.
+  const { data: sourceMounts } = useQuery({
+    queryKey: ['mounts', 'sources'],
+    queryFn: api.listSourceMounts,
+  })
+  const { data: destinationMounts } = useQuery({
+    queryKey: ['mounts', 'destinations'],
+    queryFn: api.listDestinationMounts,
+  })
+
   if (jobsError) {
     return (
       <div className="p-6">
@@ -182,6 +194,8 @@ export default function Jobs() {
       {showCreateForm && (
         <div className="mt-6">
           <JobForm
+            sourceMounts={sourceMounts ?? []}
+            destinationMounts={destinationMounts ?? []}
             onSubmit={async (data) => {
               await api.createJob(data)
               setShowCreateForm(false)
