@@ -7,8 +7,10 @@
  */
 import { waitFor } from '@testing-library/react'
 import { page } from '@vitest/browser/context'
+import { Route, Routes } from 'react-router-dom'
 import { afterEach, beforeEach, test, vi } from 'vitest'
 
+import Layout from '../components/Layout'
 import * as api from '../lib/api'
 import type { AppSettings, BackupJob, BackupRun, HealthStatus, Snapshot } from '../lib/types'
 import Dashboard from '../pages/Dashboard'
@@ -156,6 +158,13 @@ beforeEach(() => {
 
 let cleanup: (() => void) | undefined
 
+// Pages render inside the Layout shell, which hides the sidebar below the md
+// breakpoint (768px). Force a desktop-sized viewport so the screenshots
+// include the sidebar — that's the canonical view users will see.
+beforeEach(async () => {
+  await page.viewport(1280, 900)
+})
+
 afterEach(() => {
   cleanup?.()
   cleanup = undefined
@@ -163,10 +172,24 @@ afterEach(() => {
 
 // ── Page screenshots ─────────────────────────────────────────────────────────
 
+/**
+ * Render a page through the same Layout shell users see in the real app,
+ * so screenshots include the sidebar instead of the bare page tree.
+ */
+function renderPage(path: string, element: React.ReactNode) {
+  return renderWithProviders(
+    <Routes>
+      <Route element={<Layout />}>
+        <Route path={path} element={element} />
+      </Route>
+    </Routes>,
+    { route: path === '/jobs/:id' ? '/jobs/job-1' : path === '/runs/:id' ? '/runs/run-1' : path }
+  )
+}
+
 test('Dashboard - populated', async () => {
-  const result = renderWithProviders(<Dashboard />)
+  const result = renderPage('/', <Dashboard />)
   cleanup = result.unmount
-  // Wait for the dashboard to finish loading job and run data.
   await waitFor(() => {
     if (!result.container.textContent?.includes('Documents Backup')) {
       throw new Error('dashboard not ready')
@@ -176,7 +199,7 @@ test('Dashboard - populated', async () => {
 })
 
 test('Jobs - populated', async () => {
-  const result = renderWithProviders(<Jobs />)
+  const result = renderPage('/jobs', <Jobs />)
   cleanup = result.unmount
   await waitFor(() => {
     if (!result.container.textContent?.includes('Documents Backup')) {
@@ -187,7 +210,7 @@ test('Jobs - populated', async () => {
 })
 
 test('JobDetail - populated', async () => {
-  const result = renderWithProviders(<JobDetail />, { route: '/jobs/job-1' })
+  const result = renderPage('/jobs/:id', <JobDetail />)
   cleanup = result.unmount
   await waitFor(() => {
     if (!result.container.textContent?.includes('Documents Backup')) {
@@ -198,7 +221,7 @@ test('JobDetail - populated', async () => {
 })
 
 test('RunDetail - success', async () => {
-  const result = renderWithProviders(<RunDetail />, { route: '/runs/run-1' })
+  const result = renderPage('/runs/:id', <RunDetail />)
   cleanup = result.unmount
   await waitFor(() => {
     if (!result.container.textContent?.includes('Documents Backup')) {
@@ -209,7 +232,7 @@ test('RunDetail - success', async () => {
 })
 
 test('Settings - populated', async () => {
-  const result = renderWithProviders(<Settings />)
+  const result = renderPage('/settings', <Settings />)
   cleanup = result.unmount
   // Settings delays the ntfy form by ~100ms after settings load (see
   // Settings.tsx for the rationale). Wait for one of its labels — the
