@@ -16,9 +16,27 @@ if config.config_file_name is not None:
 target_metadata = Base.metadata
 
 
+def _resolve_url(ini_url: str | None) -> str:
+    """Resolve the DB URL alembic should use.
+
+    Priority: SQLALCHEMY_URL env var > value in alembic.ini / set_main_option >
+    app.db.database.DATABASE_URL. The app uses an async driver (`+aiosqlite`)
+    that alembic's sync engine cannot load, so the suffix is stripped from the
+    fallback URL.
+    """
+    if "SQLALCHEMY_URL" in os.environ:
+        return os.environ["SQLALCHEMY_URL"]
+    if ini_url:
+        return ini_url
+    # Imported lazily so tests can monkeypatch DATABASE_URL before resolution.
+    from app.db.database import DATABASE_URL
+
+    return DATABASE_URL.replace("+aiosqlite", "")
+
+
 def run_migrations_offline() -> None:
     """Generate SQL migration script without running against database."""
-    url = config.get_main_option("sqlalchemy.url")
+    url = _resolve_url(config.get_main_option("sqlalchemy.url"))
     context.configure(
         url=url,
         target_metadata=target_metadata,
@@ -33,8 +51,7 @@ def run_migrations_offline() -> None:
 def run_migrations_online() -> None:
     """Run migrations against live database."""
     configuration = config.get_section(config.config_ini_section) or {}
-    if "SQLALCHEMY_URL" in os.environ:
-        configuration["sqlalchemy.url"] = os.environ["SQLALCHEMY_URL"]
+    configuration["sqlalchemy.url"] = _resolve_url(configuration.get("sqlalchemy.url"))
     connectable = engine_from_config(
         configuration,
         prefix="sqlalchemy.",

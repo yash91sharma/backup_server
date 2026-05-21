@@ -8,6 +8,7 @@ import sqlalchemy as sa
 from alembic.config import Config
 from sqlalchemy import inspect
 
+import app.db.database as db_module
 from alembic import command
 
 
@@ -148,4 +149,31 @@ async def test_migration_creates_all_tables():
             for fk in inspector.get_foreign_keys("snapshots")
         ), "Missing FK: snapshots.run_id"
 
+        engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_migration_falls_back_to_app_database_url(monkeypatch):
+    """env.py uses app.db.database.DATABASE_URL when no override is set.
+
+    Prevents regression of the alembic/runtime URL split that caused migrations
+    to write to /app/backup.db while the app read from /app/data/backup.db.
+    """
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = Path(tmpdir) / "fallback.db"
+        monkeypatch.setattr(db_module, "DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+        monkeypatch.delenv("SQLALCHEMY_URL", raising=False)
+
+        cfg = Config(Path(__file__).parent.parent / "alembic.ini")
+        # Deliberately do NOT call cfg.set_main_option — exercises the fallback.
+        command.upgrade(cfg, "head")
+
+        assert db_path.exists(), "alembic did not write to the app's DATABASE_URL"
+
+        engine = sa.create_engine(f"sqlite:///{db_path}", echo=False)
+        inspector = inspect(engine)
+        tables = set(inspector.get_table_names())
+        assert {"backup_jobs", "backup_runs", "snapshots", "app_settings"}.issubset(
+            tables
+        )
         engine.dispose()
